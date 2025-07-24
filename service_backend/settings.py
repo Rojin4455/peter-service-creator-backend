@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
-
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
@@ -172,6 +171,8 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React dev server
+    "http://localhost:8080",  # React dev server
+    "http://localhost:8080",  # React dev server
     "http://127.0.0.1:3000",
     "http://localhost:3001",  # Alternative React port
     "http://127.0.0.1:3001",
@@ -179,13 +180,13 @@ CORS_ALLOWED_ORIGINS = [
 
 CORS_ALLOW_CREDENTIALS = True
 
+
 CORS_ALLOWED_HEADERS = [
     'authorization',
     'content-type',
     'x-csrftoken',
     'x-requested-with',
 ]
-
 
 GOOGLE_PLACES_API_KEY = config('GOOGLE_PLACES_API_KEY', '')
 
