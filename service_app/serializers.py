@@ -185,7 +185,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     """Serializer for Question model"""
     service_name = serializers.CharField(source='service.name', read_only=True)
     options = QuestionOptionSerializer(many=True, read_only=True)
-    pricing_rules = QuestionPricingSerializer(many=True, read_only=True)
+    pricing_rules = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Question
@@ -194,6 +194,12 @@ class QuestionSerializer(serializers.ModelSerializer):
             'order', 'is_active', 'created_at', 'updated_at', 'options', 'pricing_rules'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_pricing_rules(self, obj):
+        if obj.question_type == 'yes_no':
+            return QuestionPricingSerializer(obj.pricing_rules, many=True).data
+        all_option_pricing = OptionPricing.objects.filter(option__in=obj.options.all())
+        return OptionPricingSerializer(all_option_pricing, many=True).data
 
 
 class ServiceSerializer(serializers.ModelSerializer):
