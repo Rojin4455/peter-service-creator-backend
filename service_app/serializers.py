@@ -65,17 +65,30 @@ class LocationSerializer(serializers.ModelSerializer):
 
 class PackageSerializer(serializers.ModelSerializer):
     """Serializer for Package model"""
-
-
     service_name = serializers.CharField(source='service.name', read_only=True)
+    features = serializers.SerializerMethodField()
 
     class Meta:
         model = Package
         fields = [
-            'id', 'service', 'service_name', 'name', 'base_price',
-            'order', 'is_active', 'created_at', 'updated_at'
+            'id', 'service', 'service_name', 'name', 'base_price', 
+            'order', 'is_active', 'created_at', 'updated_at', 'features'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_features(self, obj):
+        """Get features included in the package"""
+        package_features = PackageFeature.objects.filter(package=obj)
+        return [
+            {
+                'id':pf.id,
+                'feature': pf.feature.id,
+                'name': pf.feature.name,
+                'description': pf.feature.description,
+                'is_included': pf.is_included
+            }
+            for pf in package_features
+        ]
 
     
     def create(self, validated_data):
