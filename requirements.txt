@@ -9,11 +9,14 @@ click-didyoumean==0.3.1
 click-plugins==1.1.1.2
 click-repl==0.3.0
 coverage==7.3.2
+cron-descriptor==1.4.5
 Django==4.2.7
+django-celery-beat==2.8.1
 django-cors-headers==4.3.1
 django-debug-toolbar==4.2.0
 django-extensions==3.2.3
 django-filter==23.3
+django-timezone-field==7.1
 djangorestframework==3.14.0
 djangorestframework_simplejwt==5.5.1
 factory-boy==3.3.0
@@ -30,6 +33,7 @@ psycopg2-binary==2.9.7
 PyJWT==2.10.1
 pytest==7.4.3
 pytest-django==4.7.0
+python-crontab==3.3.0
 python-dateutil==2.9.0.post0
 python-decouple==3.8
 pytz==2025.2

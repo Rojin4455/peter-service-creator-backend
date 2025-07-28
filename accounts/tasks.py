@@ -36,5 +36,3 @@ def make_api_call():
 
             }
         )
-    
-
