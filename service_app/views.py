@@ -318,10 +318,10 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = QuestionSerializer
     permission_classes = [IsAdminPermission]
 
-    def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save()
+    # def perform_destroy(self, instance):
+    #     # Soft delete
+    #     instance.is_active = False
+    #     instance.save()
 
 
 # Question Option Views
