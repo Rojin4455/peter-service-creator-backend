@@ -10,8 +10,8 @@ urlpatterns = [
     path('auth/logout/', views.AdminLogoutView.as_view(), name='admin-logout'),
 
     path('auth/refresh/', views.AdminTokenRefreshView.as_view(), name='token_refresh'),
-    
-        
+
+
     # Locations
     path('locations/', views.LocationListCreateView.as_view(), name='location-list-create'),
     path('locations/<uuid:pk>/', views.LocationDetailView.as_view(), name='location-detail'),

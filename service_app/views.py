@@ -230,10 +230,10 @@ class PackageDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PackageSerializer
     permission_classes = [IsAdminPermission]
 
-    def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save()
+    # def perform_destroy(self, instance):
+    #     # Soft delete
+    #     # instance.is_active = True
+    #     instance.delete()
 
 
 class PackageWithFeaturesView(generics.RetrieveAPIView):
@@ -264,10 +264,10 @@ class FeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = FeatureSerializer
     permission_classes = [IsAdminPermission]
 
-    def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save()
+    # def perform_destroy(self, instance):
+    #     # Soft delete
+    #     instance.is_active = False
+    #     instance.save()
 
 
 # Package-Feature Views

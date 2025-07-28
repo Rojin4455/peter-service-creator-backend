@@ -65,15 +65,30 @@ class LocationSerializer(serializers.ModelSerializer):
 
 class PackageSerializer(serializers.ModelSerializer):
     """Serializer for Package model"""
+
+
     service_name = serializers.CharField(source='service.name', read_only=True)
 
     class Meta:
         model = Package
         fields = [
-            'id', 'service', 'service_name', 'name', 'base_price', 
+            'id', 'service', 'service_name', 'name', 'base_price',
             'order', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    
+    def create(self, validated_data):
+        package = super().create(validated_data)
+
+        # Automatically link to all existing features under the same service
+        features = Feature.objects.filter(service=package.service, is_active=True)
+        package_features = [
+            PackageFeature(package=package, feature=feature, is_included=False)
+            for feature in features
+        ]
+        PackageFeature.objects.bulk_create(package_features)
+        return package
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -87,6 +102,18 @@ class FeatureSerializer(serializers.ModelSerializer):
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        feature = super().create(validated_data)
+
+        # Automatically link to all existing packages under the same service
+        packages = Package.objects.filter(service=feature.service, is_active=True)
+        package_features = [
+            PackageFeature(package=package, feature=feature, is_included=False)
+            for package in packages
+        ]
+        PackageFeature.objects.bulk_create(package_features)
+        return feature
 
 
 class PackageFeatureSerializer(serializers.ModelSerializer):
