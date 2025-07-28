@@ -244,7 +244,7 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = [
-            'service', 'question_text', 'question_type', 'order', 'is_active', 'options'
+            'service', 'question_text', 'question_type', 'order', 'is_active', 'options','id'
         ]
 
     def create(self, validated_data):
