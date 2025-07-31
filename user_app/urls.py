@@ -5,6 +5,8 @@ from . import views
 urlpatterns = [
     # Step 1: Submit Contact Info
     path('contacts/', views.ContactCreateView.as_view(), name='contact-create'),
+    path('contacts/<uuid:id>/', views.ContactCreateUpdateView.as_view(), name='contact-update'),
+
     
     # Step 2: List All Services
     path('services/', views.ServiceListView.as_view(), name='service-list'),

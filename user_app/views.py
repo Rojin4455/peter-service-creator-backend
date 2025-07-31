@@ -26,6 +26,14 @@ class ContactCreateView(generics.CreateAPIView):
     permission_classes = [AllowAny]
 
 
+class ContactCreateUpdateView(generics.RetrieveUpdateAPIView):
+    """Retrieve or update a contact"""
+    queryset = Contact.objects.all()
+    serializer_class = ContactSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'id'
+
+
 # Step 2: List All Services
 class ServiceListView(generics.ListAPIView):
     """List all active services"""
