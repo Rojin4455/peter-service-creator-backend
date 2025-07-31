@@ -16,6 +16,8 @@ from .serializers import (
 )
 from .utils import calculate_total_quote_price
 from service_app.serializers import PackageSerializer
+from .utils import create_ghl_contact_and_note
+
 
 
 # Step 1: Submit Contact Info
@@ -150,6 +152,8 @@ class QuoteCreateView(generics.CreateAPIView):
                 price_adjustment=price_adjustment
             )
         
+        create_ghl_contact_and_note(contact, quote)
+
         # Return quote details
         quote_serializer = QuoteSerializer(quote)
         return Response(quote_serializer.data, status=status.HTTP_201_CREATED)

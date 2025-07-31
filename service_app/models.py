@@ -166,8 +166,8 @@ class QuestionPricing(models.Model):
     """Pricing rules for questions per package"""
     
     PRICING_TYPES = [
-        ('upcharge_percent', 'Upcharge Percentage'),
-        ('discount_percent', 'Discount Percentage'),
+        ('upcharge_percent', 'Fixed Upcharge Amount'),  # Updated label
+        ('discount_percent', 'Fixed Discount Amount'),  # Updated label
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
@@ -182,7 +182,7 @@ class QuestionPricing(models.Model):
         max_digits=10, 
         decimal_places=2, 
         default=Decimal('0.00'),
-        help_text="Percentage (e.g., 10.00 for 10%) or fixed price amount"
+        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12)"  # Updated help text
     )
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -200,8 +200,8 @@ class OptionPricing(models.Model):
     """Pricing rules for question options per package"""
     
     PRICING_TYPES = [
-        ('upcharge_percent', 'Upcharge Percentage'),
-        ('discount_percent', 'Discount Percentage'),
+        ('upcharge_percent', 'Fixed Upcharge Amount'),  # Updated label
+        ('discount_percent', 'Fixed Discount Amount'),  # Updated label
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
@@ -215,7 +215,7 @@ class OptionPricing(models.Model):
         max_digits=10, 
         decimal_places=2, 
         default=Decimal('0.00'),
-        help_text="Percentage (e.g., 10.00 for 10%) or fixed price amount"
+        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12)"  # Updated help text
     )
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -227,7 +227,6 @@ class OptionPricing(models.Model):
 
     def __str__(self):
         return f"{self.package.name} - {self.option.option_text}"
-
 
 # Future-ready models for orders/invoices (when user side is built)
 class Order(models.Model):

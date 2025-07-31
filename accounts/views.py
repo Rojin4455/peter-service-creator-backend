@@ -24,7 +24,7 @@ TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token"
 SCOPE = config("SCOPE")
 
 def auth_connect(request):
-    auth_url = ("https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&"
+    auth_url = ("https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&"
                 f"redirect_uri={GHL_REDIRECTED_URI}&"
                 f"client_id={GHL_CLIENT_ID}&"
                 f"scope={SCOPE}"
