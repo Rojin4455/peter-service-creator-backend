@@ -8,15 +8,18 @@ from decimal import Decimal
 
 from .models import (
     Contact, Service, Package, Question, Quote, 
-    QuoteQuestionAnswer, QuestionOption
+    QuoteQuestionAnswer, QuestionOption,
 )
 from .serializers import (
     ContactSerializer, ServiceListSerializer, ServiceSerializer,
-    QuestionSerializer, QuoteSerializer, QuoteCreateSerializer
+    QuestionSerializer, QuoteSerializer, QuoteCreateSerializer,QuestionWithPricingSerializer
 )
 from .utils import calculate_total_quote_price
 from service_app.serializers import PackageSerializer
 from .utils import create_ghl_contact_and_note
+from service_app.models import QuestionPricing, OptionPricing
+
+
 
 
 
@@ -64,8 +67,8 @@ class PackageDetailView(generics.RetrieveAPIView):
 
 # Step 5: Get Questions for a Service
 class ServiceQuestionsView(generics.ListAPIView):
-    """Get all questions for a specific service"""
-    serializer_class = QuestionSerializer
+    """Get all questions for a specific service with package-specific pricing"""
+    serializer_class = QuestionWithPricingSerializer
     permission_classes = [AllowAny]
     
     def get_queryset(self):
@@ -74,6 +77,93 @@ class ServiceQuestionsView(generics.ListAPIView):
             service_id=service_id, 
             is_active=True
         ).order_by('order', 'created_at')
+    
+    def list(self, request, *args, **kwargs):
+        # Get package_id from query params
+        package_id = request.query_params.get('package_id')
+        if not package_id:
+            return Response(
+                {'error': 'package_id query parameter is required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate package exists and belongs to service
+        service_id = self.kwargs['service_id']
+        try:
+            package = Package.objects.get(
+                id=package_id, 
+                service_id=service_id, 
+                is_active=True
+            )
+        except Package.DoesNotExist:
+            return Response(
+                {'error': 'Package not found or does not belong to this service'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        queryset = self.get_queryset()
+        questions_data = []
+        
+        for question in queryset:
+            question_dict = {
+                'id': str(question.id),
+                'question_text': question.question_text,
+                'question_type': question.question_type,
+                'order': question.order
+            }
+            
+            if question.question_type == 'yes_no':
+                # Get yes/no pricing for this package
+                try:
+                    question_pricing = QuestionPricing.objects.get(
+                        question=question, 
+                        package=package
+                    )
+                    question_dict['yes_pricing_type'] = question_pricing.yes_pricing_type
+                    question_dict['yes_value'] = str(question_pricing.yes_value)
+                except QuestionPricing.DoesNotExist:
+                    question_dict['yes_pricing_type'] = 'ignore'
+                    question_dict['yes_value'] = '0.00'
+                
+                # No options for yes/no questions
+                question_dict['options'] = []
+                
+            elif question.question_type == 'options':
+                # Get options with pricing, exclude those marked as 'ignore'
+                options_data = []
+                
+                for option in question.options.all():
+                    try:
+                        option_pricing = OptionPricing.objects.get(
+                            option=option, 
+                            package=package
+                        )
+
+                        print("option_pricing.pricing_type: ", option_pricing.pricing_type)
+                        
+                        # Only include options that are not set to 'ignore'
+                        if option_pricing.pricing_type != 'ignore':
+                            options_data.append({
+                                'id': str(option.id),
+                                'option_text': option.option_text,
+                                'order': option.order,
+                                'pricing_type': option_pricing.pricing_type,
+                                'value': str(option_pricing.value)
+                            })
+                            
+                    except OptionPricing.DoesNotExist:
+                        # If no pricing rule exists, treat as 'ignore' and exclude
+                        continue
+                
+                question_dict['options'] = options_data
+                
+                # Remove yes/no pricing fields for options questions
+                question_dict.pop('yes_pricing_type', None)
+                question_dict.pop('yes_value', None)
+            
+            questions_data.append(question_dict)
+        
+        return Response(questions_data)
 
 
 # Step 6: Create Quote (Checkout Summary)

@@ -65,12 +65,34 @@ class QuestionOptionSerializer(serializers.ModelSerializer):
         fields = ['id', 'option_text', 'order']
 
 
+class QuestionOptionWithPricingSerializer(serializers.ModelSerializer):
+    pricing_type = serializers.CharField(read_only=True)
+    value = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = QuestionOption
+        fields = ['id', 'option_text', 'order', 'pricing_type', 'value']
+
+
 class QuestionSerializer(serializers.ModelSerializer):
     options = QuestionOptionSerializer(many=True, read_only=True)
     
     class Meta:
         model = Question
         fields = ['id', 'question_text', 'question_type', 'order', 'options']
+
+
+class QuestionWithPricingSerializer(serializers.ModelSerializer):
+    # For yes/no questions
+    yes_pricing_type = serializers.CharField(read_only=True)
+    yes_value = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    
+    # For options questions - will be populated dynamically
+    options = QuestionOptionWithPricingSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Question
+        fields = ['id', 'question_text', 'question_type', 'order', 'yes_pricing_type', 'yes_value', 'options']
 
 
 class QuoteQuestionAnswerSerializer(serializers.ModelSerializer):
