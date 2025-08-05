@@ -60,6 +60,22 @@ class Service(models.Model):
 
     def __str__(self):
         return self.name
+    
+class ServiceSettings(models.Model):
+    service = models.OneToOneField('Service', on_delete=models.CASCADE, related_name='settings')
+
+    # Disclaimers
+    general_disclaimer = models.TextField(blank=True, null=True)
+    bid_in_person_disclaimer = models.TextField(blank=True, null=True)
+
+    # Boolean settings (based on the UI)
+    apply_area_minimum = models.BooleanField(default=False)
+    apply_house_size_minimum = models.BooleanField(default=False)
+    apply_trip_charge_to_bid = models.BooleanField(default=False)
+    enable_dollar_minimum = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Settings for {self.service.name}"
 
 
 class Package(models.Model):
@@ -125,11 +141,24 @@ class Question(models.Model):
     
     QUESTION_TYPES = [
         ('yes_no', 'Yes/No'),
-        ('options', 'Multiple Options'),
+        ('describe', 'Describe (Multiple Options)'),  # Renamed from 'options'
+        ('multiple_yes_no', 'Multiple Yes/No Sub-Questions'),
+        ('conditional', 'Conditional Questions'),
+        ('quantity', 'How Many (Quantity Selection)'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service = models.ForeignKey(Service, related_name='questions', on_delete=models.CASCADE)
+    parent_question = models.ForeignKey('self', related_name='child_questions', 
+                                      on_delete=models.CASCADE, null=True, blank=True)
+    
+    # Conditional logic fields
+    condition_answer = models.CharField(max_length=20, null=True, blank=True, 
+                                      help_text="Answer value that triggers this conditional question (e.g., 'yes', 'no', or option ID)")
+    condition_option = models.ForeignKey('QuestionOption', related_name='conditional_questions', 
+                                       on_delete=models.CASCADE, null=True, blank=True,
+                                       help_text="Option that triggers this conditional question")
+    
     question_text = models.TextField()
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPES)
     order = models.PositiveIntegerField(default=0)
@@ -144,14 +173,31 @@ class Question(models.Model):
     def __str__(self):
         return f"{self.service.name} - {self.question_text[:50]}..."
 
+    @property
+    def is_conditional(self):
+        """Check if this is a conditional question"""
+        return self.parent_question is not None
+
+    @property
+    def is_parent(self):
+        """Check if this question has child questions"""
+        return self.child_questions.exists()
+
 
 class QuestionOption(models.Model):
-    """Options for multiple choice questions"""
+    """Options for describe/quantity type questions"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question = models.ForeignKey(Question, related_name='options', on_delete=models.CASCADE)
     option_text = models.CharField(max_length=255)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    
+    # For quantity questions
+    allow_quantity = models.BooleanField(default=False, 
+                                       help_text="Allow quantity input for this option")
+    max_quantity = models.PositiveIntegerField(default=1, 
+                                             help_text="Maximum allowed quantity")
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -160,21 +206,41 @@ class QuestionOption(models.Model):
 
     def __str__(self):
         return f"{self.question.question_text[:30]}... - {self.option_text}"
+    
+
+
+class SubQuestion(models.Model):
+    """Sub-questions for multiple_yes_no type questions"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    parent_question = models.ForeignKey(Question, related_name='sub_questions', on_delete=models.CASCADE)
+    sub_question_text = models.TextField()
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'sub_questions'
+        ordering = ['order', 'sub_question_text']
+
+    def __str__(self):
+        return f"{self.parent_question.question_text[:30]}... - {self.sub_question_text[:30]}..."
+    
+
 
 
 class QuestionPricing(models.Model):
     """Pricing rules for questions per package"""
     
     PRICING_TYPES = [
-        ('upcharge_percent', 'Fixed Upcharge Amount'),  # Updated label
-        ('discount_percent', 'Fixed Discount Amount'),  # Updated label
+        ('upcharge_percent', 'Fixed Upcharge Amount'),
+        ('discount_percent', 'Fixed Discount Amount'),
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question = models.ForeignKey(Question, related_name='pricing_rules', on_delete=models.CASCADE)
-    package = models.ForeignKey(Package, related_name='question_pricing', on_delete=models.CASCADE)
+    package = models.ForeignKey('Package', related_name='question_pricing', on_delete=models.CASCADE)
     
     # For Yes/No questions - pricing when answer is "Yes"
     yes_pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
@@ -182,7 +248,7 @@ class QuestionPricing(models.Model):
         max_digits=10, 
         decimal_places=2, 
         default=Decimal('0.00'),
-        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12)"  # Updated help text
+        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12)"
     )
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -196,26 +262,60 @@ class QuestionPricing(models.Model):
         return f"{self.package.name} - {self.question.question_text[:30]}..."
 
 
-class OptionPricing(models.Model):
-    """Pricing rules for question options per package"""
+class SubQuestionPricing(models.Model):
+    """Pricing rules for sub-questions per package"""
     
     PRICING_TYPES = [
-        ('upcharge_percent', 'Fixed Upcharge Amount'),  # Updated label
-        ('discount_percent', 'Fixed Discount Amount'),  # Updated label
+        ('upcharge_percent', 'Fixed Upcharge Amount'),
+        ('discount_percent', 'Fixed Discount Amount'),
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sub_question = models.ForeignKey(SubQuestion, related_name='pricing_rules', on_delete=models.CASCADE)
+    package = models.ForeignKey('Package', related_name='sub_question_pricing', on_delete=models.CASCADE)
+    
+    yes_pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
+    yes_value = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal('0.00'),
+        help_text="Fixed amount to add/subtract for 'Yes' answer"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sub_question_pricing'
+        unique_together = ['sub_question', 'package']
+
+    def __str__(self):
+        return f"{self.package.name} - {self.sub_question.sub_question_text[:30]}..."
+
+
+class OptionPricing(models.Model):
+    """Pricing rules for question options per package"""
+    
+    PRICING_TYPES = [
+        ('upcharge_percent', 'Fixed Upcharge Amount'),
+        ('discount_percent', 'Fixed Discount Amount'),
+        ('fixed_price', 'Fixed Price'),
+        ('per_quantity', 'Price Per Quantity'),  # New for quantity questions
+        ('ignore', 'Ignore'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     option = models.ForeignKey(QuestionOption, related_name='pricing_rules', on_delete=models.CASCADE)
-    package = models.ForeignKey(Package, related_name='option_pricing', on_delete=models.CASCADE)
+    package = models.ForeignKey('Package', related_name='option_pricing', on_delete=models.CASCADE)
     
     pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
     value = models.DecimalField(
         max_digits=10, 
         decimal_places=2, 
         default=Decimal('0.00'),
-        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12)"  # Updated help text
+        help_text="Fixed amount to add/subtract (e.g., 12.00 for $12) or price per quantity"
     )
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -227,6 +327,49 @@ class OptionPricing(models.Model):
 
     def __str__(self):
         return f"{self.package.name} - {self.option.option_text}"
+
+
+
+class QuestionResponse(models.Model):
+    """Store customer responses to questions"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question = models.ForeignKey(Question, on_delete=models.CASCADE)
+    # You can add user/session reference here
+    
+    # For different question types
+    yes_no_answer = models.BooleanField(null=True, blank=True)
+    text_answer = models.TextField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'question_responses'
+
+
+class OptionResponse(models.Model):
+    """Store customer responses to options"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question_response = models.ForeignKey(QuestionResponse, related_name='option_responses', on_delete=models.CASCADE)
+    option = models.ForeignKey(QuestionOption, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField(default=1)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'option_responses'
+
+
+class SubQuestionResponse(models.Model):
+    """Store customer responses to sub-questions"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question_response = models.ForeignKey(QuestionResponse, related_name='sub_question_responses', on_delete=models.CASCADE)
+    sub_question = models.ForeignKey(SubQuestion, on_delete=models.CASCADE)
+    answer = models.BooleanField()
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'sub_question_responses'
 
 # Future-ready models for orders/invoices (when user side is built)
 class Order(models.Model):

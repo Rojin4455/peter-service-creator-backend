@@ -12,13 +12,15 @@ from decimal import Decimal
 import requests
 import os
 from django.db import models
+from .models import Service, ServiceSettings
+from .serializers import ServiceSettingsSerializer
 
 from rest_framework.permissions import IsAuthenticated
 
 from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
-    Order, OrderQuestionAnswer
+    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse
 )
 from .serializers import (
     UserSerializer, LoginSerializer, LocationSerializer, ServiceSerializer,
@@ -26,7 +28,8 @@ from .serializers import (
     PackageFeatureSerializer, QuestionSerializer, QuestionCreateSerializer,
     QuestionOptionSerializer, QuestionPricingSerializer, OptionPricingSerializer,
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
-    ServiceAnalyticsSerializer
+    ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
+    PricingCalculationSerializer, SubQuestionSerializer
 )
 
 
@@ -129,50 +132,7 @@ class LocationDetailView(generics.RetrieveUpdateDestroyAPIView):
         instance.save()
 
 
-class GooglePlacesSearchView(APIView):
-    """Search Google Places API for locations"""
-    permission_classes = [IsAdminPermission]
 
-    def get(self, request):
-        query = request.query_params.get('query', '')
-        if not query:
-            return Response({'error': 'Query parameter is required'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-
-        # Note: You'll need to set GOOGLE_PLACES_API_KEY in your environment
-        api_key = os.getenv('GOOGLE_PLACES_API_KEY')
-        if not api_key:
-            return Response({'error': 'Google Places API key not configured'}, 
-                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        try:
-            url = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
-            params = {
-                'query': query,
-                'key': api_key,
-                'fields': 'place_id,name,formatted_address,geometry'
-            }
-            
-            response = requests.get(url, params=params)
-            data = response.json()
-            
-            if data.get('status') == 'OK':
-                places = []
-                for place in data.get('results', []):
-                    places.append({
-                        'place_id': place.get('place_id'),
-                        'name': place.get('name'),
-                        'address': place.get('formatted_address'),
-                        'latitude': place.get('geometry', {}).get('location', {}).get('lat'),
-                        'longitude': place.get('geometry', {}).get('location', {}).get('lng')
-                    })
-                return Response({'places': places})
-            else:
-                return Response({'error': 'Google Places API error', 'details': data}, 
-                              status=status.HTTP_400_BAD_REQUEST)
-                
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # Service Views
@@ -182,7 +142,9 @@ class ServiceListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         queryset = Service.objects.filter(is_active=True).prefetch_related(
-            'packages', 'features', 'questions'
+            'questions__options',
+            'questions__sub_questions',
+            'questions__child_questions'
         )
         search = self.request.query_params.get('search', None)
         if search:
@@ -194,11 +156,13 @@ class ServiceListCreateView(generics.ListCreateAPIView):
             return ServiceListSerializer
         return ServiceSerializer
 
-
 class ServiceDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update or delete a service"""
     queryset = Service.objects.prefetch_related(
-        'packages', 'features', 'questions__options', 'questions__pricing_rules'
+        'questions__options__pricing_rules',
+        'questions__sub_questions__pricing_rules',
+        'questions__pricing_rules',
+        'questions__child_questions'
     )
     serializer_class = ServiceSerializer
     permission_classes = [IsAdminPermission]
@@ -207,6 +171,7 @@ class ServiceDetailView(generics.RetrieveUpdateDestroyAPIView):
         # Soft delete
         instance.is_active = False
         instance.save()
+
 
 
 # Package Views
@@ -298,12 +263,27 @@ class QuestionListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminPermission]
 
     def get_queryset(self):
-        queryset = Question.objects.filter(is_active=True).select_related('service').prefetch_related(
-            'options', 'pricing_rules__package'
+        queryset = Question.objects.filter(is_active=True).select_related(
+            'service', 'parent_question', 'condition_option'
+        ).prefetch_related(
+            'options__pricing_rules',
+            'sub_questions__pricing_rules',
+            'pricing_rules__package',
+            'child_questions'
         )
+        
+        # Filter parameters
         service_id = self.request.query_params.get('service', None)
+        question_type = self.request.query_params.get('type', None)
+        parent_only = self.request.query_params.get('parent_only', 'false').lower() == 'true'
+        
         if service_id:
             queryset = queryset.filter(service_id=service_id)
+        if question_type:
+            queryset = queryset.filter(question_type=question_type)
+        if parent_only:
+            queryset = queryset.filter(parent_question__isnull=True)
+            
         return queryset.order_by('service__name', 'order', 'created_at')
 
     def get_serializer_class(self):
@@ -311,18 +291,25 @@ class QuestionListCreateView(generics.ListCreateAPIView):
             return QuestionCreateSerializer
         return QuestionSerializer
 
-
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update or delete a question"""
-    queryset = Question.objects.prefetch_related('options', 'pricing_rules')
-    serializer_class = QuestionSerializer
+    queryset = Question.objects.prefetch_related(
+        'options__pricing_rules',
+        'sub_questions__pricing_rules',
+        'pricing_rules',
+        'child_questions'
+    )
     permission_classes = [IsAdminPermission]
 
-    # def perform_destroy(self, instance):
-    #     # Soft delete
-    #     instance.is_active = False
-    #     instance.save()
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return QuestionCreateSerializer
+        return QuestionSerializer
 
+    def perform_destroy(self, instance):
+        # Soft delete
+        instance.is_active = False
+        instance.save()
 
 # Question Option Views
 class QuestionOptionListCreateView(generics.ListCreateAPIView):
@@ -332,7 +319,7 @@ class QuestionOptionListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminPermission]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().prefetch_related('pricing_rules')
         question_id = self.request.query_params.get('question', None)
         if question_id:
             queryset = queryset.filter(question_id=question_id)
@@ -341,7 +328,7 @@ class QuestionOptionListCreateView(generics.ListCreateAPIView):
 
 class QuestionOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update or delete a question option"""
-    queryset = QuestionOption.objects.all()
+    queryset = QuestionOption.objects.prefetch_related('pricing_rules')
     serializer_class = QuestionOptionSerializer
     permission_classes = [IsAdminPermission]
 
@@ -349,7 +336,6 @@ class QuestionOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
         # Soft delete
         instance.is_active = False
         instance.save()
-
 
 # Pricing Views
 class QuestionPricingListCreateView(generics.ListCreateAPIView):
@@ -378,6 +364,45 @@ class QuestionPricingDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminPermission]
 
 
+
+class SubQuestionPricingListCreateView(generics.ListCreateAPIView):
+    """List and create sub-question pricing rules"""
+    queryset = SubQuestionPricing.objects.select_related('sub_question', 'package')
+    serializer_class = SubQuestionPricingSerializer
+    permission_classes = [IsAdminPermission]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        sub_question_id = self.request.query_params.get('sub_question', None)
+        package_id = self.request.query_params.get('package', None)
+        
+        if sub_question_id:
+            queryset = queryset.filter(sub_question_id=sub_question_id)
+        if package_id:
+            queryset = queryset.filter(package_id=package_id)
+            
+        return queryset
+
+
+class SubQuestionPricingDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a sub-question pricing rule"""
+    queryset = SubQuestionPricing.objects.all()
+    serializer_class = SubQuestionPricingSerializer
+    permission_classes = [IsAdminPermission]
+
+
+class SubQuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a sub-question"""
+    queryset = SubQuestion.objects.prefetch_related('pricing_rules')
+    serializer_class = SubQuestionSerializer
+    permission_classes = [IsAdminPermission]
+
+    def perform_destroy(self, instance):
+        # Soft delete
+        instance.is_active = False
+        instance.save()
+
+
 class OptionPricingListCreateView(generics.ListCreateAPIView):
     """List and create option pricing rules"""
     queryset = OptionPricing.objects.select_related('option', 'package')
@@ -397,11 +422,27 @@ class OptionPricingListCreateView(generics.ListCreateAPIView):
         return queryset
 
 
+
 class OptionPricingDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update or delete an option pricing rule"""
     queryset = OptionPricing.objects.all()
     serializer_class = OptionPricingSerializer
     permission_classes = [IsAdminPermission]
+
+
+
+class SubQuestionListCreateView(generics.ListCreateAPIView):
+    """List and create sub-questions"""
+    queryset = SubQuestion.objects.filter(is_active=True)
+    serializer_class = SubQuestionSerializer
+    permission_classes = [IsAdminPermission]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().prefetch_related('pricing_rules')
+        parent_question_id = self.request.query_params.get('parent_question', None)
+        if parent_question_id:
+            queryset = queryset.filter(parent_question_id=parent_question_id)
+        return queryset.order_by('order', 'sub_question_text')
 
 
 # Bulk Operations Views
@@ -425,11 +466,11 @@ class BulkQuestionPricingView(APIView):
                         pricing_type = rule['pricing_type']
                         value = Decimal(str(rule['value']))
                         
-                        package = get_object_or_404(Package, id=package_id)
+                        # package = get_object_or_404(Package, id=package_id)
                         
                         pricing, created = QuestionPricing.objects.get_or_create(
                             question=question,
-                            package=package,
+                            package_id=package_id,
                             defaults={
                                 'yes_pricing_type': pricing_type,
                                 'yes_value': value
@@ -441,7 +482,47 @@ class BulkQuestionPricingView(APIView):
                             pricing.yes_value = value
                             pricing.save()
 
-                return Response({'message': 'Pricing rules updated successfully'})
+                return Response({'message': 'Question pricing rules updated successfully'})
+                
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class BulkSubQuestionPricingView(APIView):
+    """Bulk update sub-question pricing rules for all packages"""
+    permission_classes = [IsAdminPermission]
+
+    def post(self, request):
+        serializer = BulkSubQuestionPricingSerializer(data=request.data)
+        if serializer.is_valid():
+            sub_question_id = serializer.validated_data['sub_question_id']
+            pricing_rules = serializer.validated_data['pricing_rules']
+
+            try:
+                with transaction.atomic():
+                    sub_question = get_object_or_404(SubQuestion, id=sub_question_id)
+                    
+                    for rule in pricing_rules:
+                        package_id = rule['package_id']
+                        pricing_type = rule['pricing_type']
+                        value = Decimal(str(rule['value']))
+                        
+                        pricing, created = SubQuestionPricing.objects.get_or_create(
+                            sub_question=sub_question,
+                            package_id=package_id,
+                            defaults={
+                                'yes_pricing_type': pricing_type,
+                                'yes_value': value
+                            }
+                        )
+                        
+                        if not created:
+                            pricing.yes_pricing_type = pricing_type
+                            pricing.yes_value = value
+                            pricing.save()
+
+                return Response({'message': 'Sub-question pricing rules updated successfully'})
                 
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -470,11 +551,9 @@ class BulkOptionPricingView(APIView):
                     pricing_type = rule['pricing_type']
                     value = Decimal(str(rule['value']))
                     
-                    package = get_object_or_404(Package, id=package_id)
-                    
                     pricing, created = OptionPricing.objects.get_or_create(
                         option=option,
-                        package=package,
+                        package_id=package_id,
                         defaults={
                             'pricing_type': pricing_type,
                             'value': value
@@ -490,6 +569,107 @@ class BulkOptionPricingView(APIView):
             
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class QuestionTreeView(APIView):
+    """Get the complete question tree for a service"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, service_id):
+        try:
+            service = get_object_or_404(Service, id=service_id, is_active=True)
+            
+            # Get root questions (no parent)
+            root_questions = Question.objects.filter(
+                service=service,
+                is_active=True,
+                parent_question__isnull=True
+            ).prefetch_related(
+                'options__pricing_rules',
+                'sub_questions__pricing_rules',
+                'pricing_rules',
+                'child_questions__options',
+                'child_questions__sub_questions',
+                'child_questions__pricing_rules'
+            ).order_by('order')
+            
+            serializer = QuestionSerializer(root_questions, many=True, context={'request': request})
+            
+            return Response({
+                'service': {
+                    'id': service.id,
+                    'name': service.name,
+                    'description': service.description
+                },
+                'questions': serializer.data
+            })
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ConditionalQuestionsView(APIView):
+    """Get conditional questions based on parent question and answer"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, parent_question_id):
+        answer = request.query_params.get('answer')
+        option_id = request.query_params.get('option_id')
+        
+        if not answer and not option_id:
+            return Response({'error': 'Either answer or option_id is required'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            parent_question = get_object_or_404(Question, id=parent_question_id)
+            
+            # Build filter for conditional questions
+            filter_kwargs = {
+                'parent_question': parent_question,
+                'is_active': True
+            }
+            
+            if answer:
+                filter_kwargs['condition_answer'] = answer
+            if option_id:
+                filter_kwargs['condition_option_id'] = option_id
+            
+            conditional_questions = Question.objects.filter(**filter_kwargs).prefetch_related(
+                'options__pricing_rules',
+                'sub_questions__pricing_rules',
+                'pricing_rules'
+            ).order_by('order')
+            
+            serializer = QuestionSerializer(conditional_questions, many=True, context={'request': request})
+            
+            return Response({
+                'parent_question_id': parent_question_id,
+                'condition': {
+                    'answer': answer,
+                    'option_id': option_id
+                },
+                'conditional_questions': serializer.data
+            })
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+
+class QuestionResponseListCreateView(generics.ListCreateAPIView):
+    """List and create question responses"""
+    queryset = QuestionResponse.objects.prefetch_related(
+        'option_responses__option',
+        'sub_question_responses__sub_question'
+    )
+    serializer_class = QuestionResponseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        question_id = self.request.query_params.get('question', None)
+        if question_id:
+            queryset = queryset.filter(question_id=question_id)
+        return queryset.order_by('-created_at')
 
 
 
@@ -525,80 +705,137 @@ class ServiceAnalyticsView(APIView):
 
 # Utility Views
 class PricingCalculatorView(APIView):
-    """Calculate pricing for a given package and answers"""
-    permission_classes = [IsAdminPermission]
+    """Calculate pricing based on question responses"""
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        package_id = request.data.get('package_id')
-        location_id = request.data.get('location_id')
-        answers = request.data.get('answers', [])  # List of {question_id, answer} or {question_id, option_id}
+        serializer = PricingCalculationSerializer(data=request.data)
+        if serializer.is_valid():
+            service_id = serializer.validated_data['service_id']
+            package_id = serializer.validated_data['package_id']
+            responses = serializer.validated_data['responses']
 
-        if not package_id:
-            return Response({'error': 'package_id is required'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            try:
+                service = get_object_or_404(Service, id=service_id)
+                # package = get_object_or_404(Package, id=package_id)
+                
+                total_adjustment = Decimal('0.00')
+                breakdown = []
 
+                for response in responses:
+                    question_id = response['question_id']
+                    question = get_object_or_404(Question, id=question_id)
+                    
+                    question_adjustment = Decimal('0.00')
+                    question_breakdown = {
+                        'question_id': question_id,
+                        'question_text': question.question_text,
+                        'question_type': question.question_type,
+                        'adjustments': []
+                    }
+
+                    if question.question_type == 'yes_no':
+                        if response.get('yes_no_answer') is True:
+                            pricing = QuestionPricing.objects.filter(
+                                question=question, package_id=package_id
+                            ).first()
+                            if pricing and pricing.yes_pricing_type != 'ignore':
+                                question_adjustment += pricing.yes_value
+                                question_breakdown['adjustments'].append({
+                                    'type': 'yes_answer',
+                                    'pricing_type': pricing.yes_pricing_type,
+                                    'value': pricing.yes_value
+                                })
+
+                    elif question.question_type in ['describe', 'quantity']:
+                        selected_options = response.get('selected_options', [])
+                        for option_data in selected_options:
+                            option_id = option_data['option_id']
+                            quantity = option_data.get('quantity', 1)
+                            
+                            pricing = OptionPricing.objects.filter(
+                                option_id=option_id, package_id=package_id
+                            ).first()
+                            
+                            if pricing and pricing.pricing_type != 'ignore':
+                                if pricing.pricing_type == 'per_quantity':
+                                    adjustment = pricing.value * quantity
+                                else:
+                                    adjustment = pricing.value
+                                    
+                                question_adjustment += adjustment
+                                question_breakdown['adjustments'].append({
+                                    'type': 'option_selection',
+                                    'option_id': option_id,
+                                    'quantity': quantity,
+                                    'pricing_type': pricing.pricing_type,
+                                    'value': adjustment
+                                })
+
+                    elif question.question_type == 'multiple_yes_no':
+                        sub_question_answers = response.get('sub_question_answers', [])
+                        for sub_answer in sub_question_answers:
+                            if sub_answer.get('answer') is True:
+                                sub_question_id = sub_answer['sub_question_id']
+                                pricing = SubQuestionPricing.objects.filter(
+                                    sub_question_id=sub_question_id, package_id=package_id
+                                ).first()
+                                
+                                if pricing and pricing.yes_pricing_type != 'ignore':
+                                    question_adjustment += pricing.yes_value
+                                    question_breakdown['adjustments'].append({
+                                        'type': 'sub_question_yes',
+                                        'sub_question_id': sub_question_id,
+                                        'pricing_type': pricing.yes_pricing_type,
+                                        'value': pricing.yes_value
+                                    })
+
+                    total_adjustment += question_adjustment
+                    question_breakdown['total_adjustment'] = question_adjustment
+                    breakdown.append(question_breakdown)
+
+                return Response({
+                    'service_id': service_id,
+                    'package_id': package_id,
+                    'total_adjustment': total_adjustment,
+                    'breakdown': breakdown
+                })
+                
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        
+
+
+class ServiceSettingsView(APIView):
+    def get(self, request, service_id):
+        service = get_object_or_404(Service, id=service_id)
         try:
-            package = get_object_or_404(Package, id=package_id)
-            location = None
-            if location_id:
-                location = get_object_or_404(Location, id=location_id)
+            settings = service.settings
+            serializer = ServiceSettingsSerializer(settings)
+            return Response(serializer.data)
+        except ServiceSettings.DoesNotExist:
+            return Response({"detail": "Settings not found."}, status=status.HTTP_404_NOT_FOUND)
 
-            # Base calculations
-            base_price = package.base_price
-            trip_surcharge = location.trip_surcharge if location else Decimal('0.00')
-            question_adjustments = Decimal('0.00')
+    def post(self, request, service_id):
+        service = get_object_or_404(Service, id=service_id)
+        if hasattr(service, 'settings'):
+            return Response({"detail": "Settings already exist."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Calculate question adjustments
-            for answer in answers:
-                question_id = answer.get('question_id')
-                question = get_object_or_404(Question, id=question_id)
+        serializer = ServiceSettingsSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(service=service)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-                if question.question_type == 'yes_no':
-                    yes_answer = answer.get('answer', False)
-                    if yes_answer:
-                        try:
-                            pricing = QuestionPricing.objects.get(question=question, package=package)
-                            adjustment = self._calculate_adjustment(
-                                base_price, pricing.yes_pricing_type, pricing.yes_value
-                            )
-                            question_adjustments += adjustment
-                        except QuestionPricing.DoesNotExist:
-                            pass
+    def put(self, request, service_id):
+        service = get_object_or_404(Service, id=service_id)
+        settings = get_object_or_404(ServiceSettings, service=service)
 
-                elif question.question_type == 'options':
-                    option_id = answer.get('option_id')
-                    if option_id:
-                        try:
-                            option = get_object_or_404(QuestionOption, id=option_id)
-                            pricing = OptionPricing.objects.get(option=option, package=package)
-                            adjustment = self._calculate_adjustment(
-                                base_price, pricing.pricing_type, pricing.value
-                            )
-                            question_adjustments += adjustment
-                        except OptionPricing.DoesNotExist:
-                            pass
-
-            total_price = base_price + trip_surcharge + question_adjustments
-
-            return Response({
-                'base_price': base_price,
-                'trip_surcharge': trip_surcharge,
-                'question_adjustments': question_adjustments,
-                'total_price': total_price,
-                'package_name': package.name,
-                'location_name': location.name if location else None
-            })
-
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    def _calculate_adjustment(self, base_price, pricing_type, value):
-        """Calculate price adjustment based on pricing type"""
-        if pricing_type == 'upcharge_percent':
-            return base_price * (value / Decimal('100'))
-        elif pricing_type == 'discount_percent':
-            return -(base_price * (value / Decimal('100')))
-        elif pricing_type == 'fixed_price':
-            return value
-        else:  # ignore
-            return Decimal('0.00')
+        serializer = ServiceSettingsSerializer(settings, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

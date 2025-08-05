@@ -3,56 +3,98 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
-# Admin API URLs
+# Complete Admin API URLs
 urlpatterns = [
-    # Authentication
+    # ============================================================================
+    # AUTHENTICATION ENDPOINTS
+    # ============================================================================
     path('auth/login/', views.AdminTokenObtainPairView.as_view(), name='admin-login'),
     path('auth/logout/', views.AdminLogoutView.as_view(), name='admin-logout'),
-
     path('auth/refresh/', views.AdminTokenRefreshView.as_view(), name='token_refresh'),
 
-
-    # Locations
+    # ============================================================================
+    # LOCATION MANAGEMENT (if you have these)
+    # ============================================================================
     path('locations/', views.LocationListCreateView.as_view(), name='location-list-create'),
     path('locations/<uuid:pk>/', views.LocationDetailView.as_view(), name='location-detail'),
-    path('locations/search/google-places/', views.GooglePlacesSearchView.as_view(), name='google-places-search'),
     
-    # Services
+    # ============================================================================
+    # SERVICE MANAGEMENT
+    # ============================================================================
     path('services/', views.ServiceListCreateView.as_view(), name='service-list-create'),
     path('services/<uuid:pk>/', views.ServiceDetailView.as_view(), name='service-detail'),
+    path('services/<uuid:service_id>/settings/', views.ServiceSettingsView.as_view(), name='service-settings'),
+    path('services/<uuid:service_id>/question-tree/', views.QuestionTreeView.as_view(), name='service-question-tree'),
     path('services/analytics/', views.ServiceAnalyticsView.as_view(), name='service-analytics'),
     
-    # Packages
+    # ============================================================================
+    # PACKAGE MANAGEMENT (if you have these)
+    # ============================================================================
     path('packages/', views.PackageListCreateView.as_view(), name='package-list-create'),
     path('packages/<uuid:pk>/', views.PackageDetailView.as_view(), name='package-detail'),
     path('packages/<uuid:pk>/features/', views.PackageWithFeaturesView.as_view(), name='package-features'),
     
-    # Features
+    # ============================================================================
+    # FEATURE MANAGEMENT (if you have these)
+    # ============================================================================
     path('features/', views.FeatureListCreateView.as_view(), name='feature-list-create'),
     path('features/<uuid:pk>/', views.FeatureDetailView.as_view(), name='feature-detail'),
     
-    # Package-Feature Relationships
+    # ============================================================================
+    # PACKAGE-FEATURE RELATIONSHIPS (if you have these)
+    # ============================================================================
     path('package-features/', views.PackageFeatureListCreateView.as_view(), name='package-feature-list-create'),
     path('package-features/<uuid:pk>/', views.PackageFeatureDetailView.as_view(), name='package-feature-detail'),
     
-    # Questions
+    # ============================================================================
+    # QUESTION MANAGEMENT (Core Feature)
+    # ============================================================================
+    
+    # Main Questions
     path('questions/', views.QuestionListCreateView.as_view(), name='question-list-create'),
     path('questions/<uuid:pk>/', views.QuestionDetailView.as_view(), name='question-detail'),
+    path('questions/<uuid:parent_question_id>/conditional/', views.ConditionalQuestionsView.as_view(), name='conditional-questions'),
     
-    # Question Options
+    # Question Options (for describe/quantity type questions)
     path('question-options/', views.QuestionOptionListCreateView.as_view(), name='question-option-list-create'),
     path('question-options/<uuid:pk>/', views.QuestionOptionDetailView.as_view(), name='question-option-detail'),
     
-    # Pricing Rules
+    # Sub-Questions (for multiple_yes_no type questions)
+    path('sub-questions/', views.SubQuestionListCreateView.as_view(), name='sub-question-list-create'),
+    path('sub-questions/<uuid:pk>/', views.SubQuestionDetailView.as_view(), name='sub-question-detail'),
+    
+    # ============================================================================
+    # PRICING MANAGEMENT
+    # ============================================================================
+    
+    # Question Pricing (for yes_no/conditional questions)
     path('question-pricing/', views.QuestionPricingListCreateView.as_view(), name='question-pricing-list-create'),
     path('question-pricing/<uuid:pk>/', views.QuestionPricingDetailView.as_view(), name='question-pricing-detail'),
+    
+    # Sub-Question Pricing (for multiple_yes_no sub-questions)
+    path('sub-question-pricing/', views.SubQuestionPricingListCreateView.as_view(), name='sub-question-pricing-list-create'),
+    path('sub-question-pricing/<uuid:pk>/', views.SubQuestionPricingDetailView.as_view(), name='sub-question-pricing-detail'),
+    
+    # Option Pricing (for describe/quantity question options)
     path('option-pricing/', views.OptionPricingListCreateView.as_view(), name='option-pricing-list-create'),
     path('option-pricing/<uuid:pk>/', views.OptionPricingDetailView.as_view(), name='option-pricing-detail'),
     
-    # Bulk Operations
+    # ============================================================================
+    # BULK OPERATIONS
+    # ============================================================================
     path('questions/bulk-pricing/', views.BulkQuestionPricingView.as_view(), name='bulk-question-pricing'),
+    path('sub-questions/bulk-pricing/', views.BulkSubQuestionPricingView.as_view(), name='bulk-sub-question-pricing'),
     path('options/bulk-pricing/', views.BulkOptionPricingView.as_view(), name='bulk-option-pricing'),
     
-    # Utilities
+    # ============================================================================
+    # CUSTOMER RESPONSES & INTERACTIONS
+    # ============================================================================
+    path('question-responses/', views.QuestionResponseListCreateView.as_view(), name='question-response-list-create'),
+    # path('question-responses/<uuid:pk>/', views.QuestionResponseDetailView.as_view(), name='question-response-detail'),
+    
+    # ============================================================================
+    # UTILITY ENDPOINTS
+    # ============================================================================
     path('pricing/calculate/', views.PricingCalculatorView.as_view(), name='pricing-calculator'),
+    # path('questions/validate-structure/', views.QuestionStructureValidatorView.as_view(), name='validate-question-structure'),
 ]
