@@ -576,16 +576,38 @@ class GlobalSizePackageSerializer(serializers.ModelSerializer):
         fields = ['id', 'min_sqft', 'max_sqft', 'order', 'template_prices']
 
     def create(self, validated_data):
+        from .models import Service, ServicePackageSizeMapping
+
         templates = validated_data.pop('template_prices', [])
         global_size = GlobalSizePackage.objects.create(**validated_data)
+
+        # Create template prices
         for template in templates:
             GlobalPackageTemplate.objects.create(global_size=global_size, **template)
+
+        # 🧠 Auto-map to all services' packages by order
+        all_services = Service.objects.prefetch_related('packages').filter(is_active=True)
+
+        for service in all_services:
+            service_packages = list(service.packages.filter(is_active=True).order_by('order'))
+            sorted_templates = sorted(global_size.template_prices.all(), key=lambda t: t.order)
+
+            for idx, template in enumerate(sorted_templates):
+                if idx < len(service_packages):
+                    service_package = service_packages[idx]
+                    # Avoid duplicates
+                    ServicePackageSizeMapping.objects.get_or_create(
+                        service_package=service_package,
+                        global_size=global_size,
+                        defaults={'price': template.price}
+                    )
+
         return global_size
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         representation['template_prices'] = GlobalPackageTemplateSerializer(
-            instance.template_prices.all(), many=True
+            instance.template_prices.all().order_by('order'), many=True
         ).data
         return representation
     
