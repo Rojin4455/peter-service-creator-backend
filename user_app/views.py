@@ -18,6 +18,7 @@ from .utils import calculate_total_quote_price
 from service_app.serializers import PackageSerializer
 from .utils import create_ghl_contact_and_note
 from service_app.models import QuestionPricing, OptionPricing
+from rest_framework.views import APIView
 
 
 
@@ -315,3 +316,41 @@ class ContactQuotesView(generics.ListAPIView):
     def get_queryset(self):
         contact_id = self.kwargs['contact_id']
         return Quote.objects.filter(contact_id=contact_id)
+    
+
+
+class QuestionTreeView(APIView):
+    """Get the complete question tree for a service"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, service_id):
+        try:
+            service = get_object_or_404(Service, id=service_id, is_active=True)
+            
+            # Get root questions (no parent)
+            root_questions = Question.objects.filter(
+                service=service,
+                is_active=True,
+                parent_question__isnull=True
+            ).prefetch_related(
+                'options__pricing_rules',
+                'sub_questions__pricing_rules',
+                'pricing_rules',
+                'child_questions__options',
+                'child_questions__sub_questions',
+                'child_questions__pricing_rules'
+            ).order_by('order')
+            
+            serializer = QuestionSerializer(root_questions, many=True, context={'request': request})
+            
+            return Response({
+                'service': {
+                    'id': service.id,
+                    'name': service.name,
+                    'description': service.description
+                },
+                'questions': serializer.data
+            })
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

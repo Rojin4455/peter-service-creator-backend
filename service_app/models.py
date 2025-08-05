@@ -430,3 +430,50 @@ class OrderQuestionAnswer(models.Model):
 
     def __str__(self):
         return f"Order {self.order.id} - {self.question.question_text[:30]}..."
+    
+
+
+
+# models.py
+class GlobalSizePackage(models.Model):
+    """Defines a size range globally applicable to all services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    min_sqft = models.PositiveIntegerField()
+    max_sqft = models.PositiveIntegerField()
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'min_sqft']
+
+    def __str__(self):
+        return f"{self.min_sqft} – {self.max_sqft} sqft"
+    
+
+class GlobalPackageTemplate(models.Model):
+    """Defines prices per package type for a global size range"""
+    global_size = models.ForeignKey(GlobalSizePackage, related_name='template_prices', on_delete=models.CASCADE)
+    label = models.CharField(max_length=255)  # Example: Package 1, Package 2
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+        unique_together = ['global_size', 'label']
+
+    def __str__(self):
+        return f"{self.label} @ {self.global_size}"
+    
+
+class ServicePackageSizeMapping(models.Model):
+    """Actual price mapping for service-level packages against size range"""
+    service_package = models.ForeignKey(Package, related_name='size_pricings', on_delete=models.CASCADE)
+    global_size = models.ForeignKey(GlobalSizePackage, on_delete=models.CASCADE)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        unique_together = ['service_package', 'global_size']
+        ordering = ['global_size__order']
+
+    def __str__(self):
+        return f"{self.service_package} ({self.global_size}) - ₹{self.price}"

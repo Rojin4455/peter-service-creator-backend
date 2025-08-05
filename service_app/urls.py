@@ -97,4 +97,9 @@ urlpatterns = [
     # ============================================================================
     path('pricing/calculate/', views.PricingCalculatorView.as_view(), name='pricing-calculator'),
     # path('questions/validate-structure/', views.QuestionStructureValidatorView.as_view(), name='validate-question-structure'),
+
+
+    path('global-sizes/', views.GlobalSizePackageListCreateView.as_view(), name='global-size-create'),
+    path('services/<uuid:service_id>/auto-map-packages/', views.AutoMapGlobalToServicePackages.as_view(), name='auto-map-packages'),
+    path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesAPIView.as_view(), name='mapped-sizes'),
 ]

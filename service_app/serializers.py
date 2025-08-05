@@ -327,8 +327,8 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 class ServiceSerializer(serializers.ModelSerializer):
     """Serializer for Service model"""
-    # packages = PackageSerializer(many=True, read_only=True)  # Assuming you have this
-    # features = FeatureSerializer(many=True, read_only=True)  # Assuming you have this
+    packages = PackageSerializer(many=True, read_only=True)  # Assuming you have this
+    features = FeatureSerializer(many=True, read_only=True)  # Assuming you have this
     questions = serializers.SerializerMethodField(read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
 
@@ -337,7 +337,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'is_active', 'order',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
-            'questions'  # 'packages', 'features', 
+            'questions' ,'packages', 'features', 
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
 
@@ -557,3 +557,47 @@ class ServiceSettingsSerializer(serializers.ModelSerializer):
             'apply_trip_charge_to_bid',
             'enable_dollar_minimum',
         ]
+
+
+
+from .models import GlobalPackageTemplate, GlobalSizePackage, ServicePackageSizeMapping
+
+class GlobalPackageTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GlobalPackageTemplate
+        fields = ['label', 'price', 'order']
+
+
+class GlobalSizePackageSerializer(serializers.ModelSerializer):
+    template_prices = GlobalPackageTemplateSerializer(many=True)
+
+    class Meta:
+        model = GlobalSizePackage
+        fields = ['id', 'min_sqft', 'max_sqft', 'order', 'template_prices']
+
+    def create(self, validated_data):
+        templates = validated_data.pop('template_prices', [])
+        global_size = GlobalSizePackage.objects.create(**validated_data)
+        for template in templates:
+            GlobalPackageTemplate.objects.create(global_size=global_size, **template)
+        return global_size
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['template_prices'] = GlobalPackageTemplateSerializer(
+            instance.template_prices.all(), many=True
+        ).data
+        return representation
+    
+
+
+class ServicePackageSizeMappingSerializer(serializers.ModelSerializer):
+    service_package_name = serializers.CharField(source='service_package.name', read_only=True)
+    global_size_range = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServicePackageSizeMapping
+        fields = ['id', 'service_package', 'service_package_name', 'global_size', 'global_size_range', 'price']
+
+    def get_global_size_range(self, obj):
+        return f"{obj.global_size.min_sqft} – {obj.global_size.max_sqft} sqft"

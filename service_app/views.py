@@ -839,3 +839,68 @@ class ServiceSettingsView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+
+from .serializers import GlobalSizePackageSerializer, ServicePackageSizeMappingSerializer
+from .models import GlobalSizePackage, ServicePackageSizeMapping
+
+class GlobalSizePackageListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /api/global-sizes/ → List all global size packages with templates
+    POST /api/global-sizes/ → Create a global size package with template prices
+    """
+    serializer_class = GlobalSizePackageSerializer
+    queryset = GlobalSizePackage.objects.all().prefetch_related('template_prices')
+
+class AutoMapGlobalToServicePackages(APIView):
+    """
+    POST /api/services/{service_id}/auto-map-packages/
+    Automatically map global pricing templates to service-level packages
+    by order.
+    """
+    def post(self, request, service_id):
+        try:
+            service = Service.objects.prefetch_related('packages').get(id=service_id)
+        except Service.DoesNotExist:
+            return Response({'detail': 'Service not found'}, status=404)
+
+        global_sizes = GlobalSizePackage.objects.prefetch_related('template_prices').order_by('order')
+        service_packages = list(service.packages.filter(is_active=True).order_by('order'))
+
+        if not service_packages:
+            return Response({'detail': 'No service-level packages found.'}, status=400)
+
+        created_mappings = []
+        for global_size in global_sizes:
+            templates = list(global_size.template_prices.order_by('order'))
+            for idx, template in enumerate(templates):
+                if idx < len(service_packages):
+                    service_package = service_packages[idx]
+                    mapping, created = ServicePackageSizeMapping.objects.get_or_create(
+                        service_package=service_package,
+                        global_size=global_size,
+                        defaults={'price': template.price}
+                    )
+                    if created:
+                        created_mappings.append(mapping)
+
+        return Response(ServicePackageSizeMappingSerializer(created_mappings, many=True).data, status=201)
+    
+
+from rest_framework.generics import ListAPIView
+
+class ServiceMappedSizesAPIView(ListAPIView):
+    """
+    GET /api/services/{service_id}/mapped-sizes/
+
+    Retrieve all size mappings with prices for a given service.
+    """
+    serializer_class = ServicePackageSizeMappingSerializer
+
+    def get_queryset(self):
+        service_id = self.kwargs['service_id']
+        return ServicePackageSizeMapping.objects.filter(
+            service_package__service_id=service_id
+        ).select_related('global_size', 'service_package')
