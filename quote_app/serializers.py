@@ -1,0 +1,246 @@
+# user_serializers.py - Serializers for user-side functionality
+from rest_framework import serializers
+from decimal import Decimal
+from service_app.models import (
+    Service, Package, Feature, PackageFeature, Location, 
+    Question, QuestionOption, SubQuestion, GlobalSizePackage,
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing
+)
+from .models import (
+    CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
+)
+
+class LocationPublicSerializer(serializers.ModelSerializer):
+    """Public serializer for locations"""
+    class Meta:
+        model = Location
+        fields = ['id', 'name', 'address', 'trip_surcharge']
+
+class ServicePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for services"""
+    packages_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Service
+        fields = ['id', 'name', 'description', 'packages_count']
+    
+    def get_packages_count(self, obj):
+        return obj.packages.filter(is_active=True).count()
+
+class PackagePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for packages"""
+    class Meta:
+        model = Package
+        fields = ['id', 'name', 'base_price', 'order']
+
+class FeaturePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for features"""
+    class Meta:
+        model = Feature
+        fields = ['id', 'name', 'description']
+
+class QuestionOptionPublicSerializer(serializers.ModelSerializer):
+    """Public serializer for question options"""
+    class Meta:
+        model = QuestionOption
+        fields = ['id', 'option_text', 'order', 'allow_quantity', 'max_quantity']
+
+class SubQuestionPublicSerializer(serializers.ModelSerializer):
+    """Public serializer for sub-questions"""
+    class Meta:
+        model = SubQuestion
+        fields = ['id', 'sub_question_text', 'order']
+
+class QuestionPublicSerializer(serializers.ModelSerializer):
+    """Public serializer for questions"""
+    options = QuestionOptionPublicSerializer(many=True, read_only=True)
+    sub_questions = SubQuestionPublicSerializer(many=True, read_only=True)
+    child_questions = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Question
+        fields = [
+            'id', 'question_text', 'question_type', 'order',
+            'parent_question', 'condition_answer', 'condition_option',
+            'options', 'sub_questions', 'child_questions'
+        ]
+    
+    def get_child_questions(self, obj):
+        child_questions = obj.child_questions.filter(is_active=True).order_by('order')
+        return QuestionPublicSerializer(child_questions, many=True, context=self.context).data
+
+class GlobalSizePackagePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for global size packages"""
+    class Meta:
+        model = GlobalSizePackage
+        fields = ['id', 'min_sqft', 'max_sqft']
+
+# Customer submission serializers
+class CustomerSubmissionCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating customer submissions"""
+    class Meta:
+        model = CustomerSubmission
+        fields = [
+            'customer_name', 'customer_email', 'customer_phone',
+            'customer_address', 'house_sqft', 'location'
+        ]
+    
+    def create(self, validated_data):
+        # Set expiration date (e.g., 30 days from now)
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        submission = CustomerSubmission.objects.create(**validated_data)
+        submission.expires_at = timezone.now() + timedelta(days=30)
+        submission.save()
+        return submission
+
+class CustomerServiceSelectionSerializer(serializers.ModelSerializer):
+    """Serializer for service selections"""
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    
+    class Meta:
+        model = CustomerServiceSelection
+        fields = [
+            'id', 'service', 'service_name', 'base_price_total',
+            'question_adjustments', 'surcharge_applicable', 'surcharge_amount'
+        ]
+        read_only_fields = ['id', 'base_price_total', 'question_adjustments', 'surcharge_amount']
+
+class CustomerOptionResponseSerializer(serializers.ModelSerializer):
+    """Serializer for option responses"""
+    option_text = serializers.CharField(source='option.option_text', read_only=True)
+    
+    class Meta:
+        model = CustomerOptionResponse
+        fields = ['id', 'option', 'option_text', 'quantity', 'price_adjustment']
+        read_only_fields = ['id', 'price_adjustment']
+
+class CustomerSubQuestionResponseSerializer(serializers.ModelSerializer):
+    """Serializer for sub-question responses"""
+    sub_question_text = serializers.CharField(source='sub_question.sub_question_text', read_only=True)
+    
+    class Meta:
+        model = CustomerSubQuestionResponse
+        fields = ['id', 'sub_question', 'sub_question_text', 'answer', 'price_adjustment']
+        read_only_fields = ['id', 'price_adjustment']
+
+class CustomerQuestionResponseSerializer(serializers.ModelSerializer):
+    """Serializer for question responses"""
+    question_text = serializers.CharField(source='question.question_text', read_only=True)
+    question_type = serializers.CharField(source='question.question_type', read_only=True)
+    option_responses = CustomerOptionResponseSerializer(many=True, read_only=True)
+    sub_question_responses = CustomerSubQuestionResponseSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = CustomerQuestionResponse
+        fields = [
+            'id', 'question', 'question_text', 'question_type',
+            'yes_no_answer', 'text_answer', 'option_responses',
+            'sub_question_responses', 'price_adjustment'
+        ]
+        read_only_fields = ['id', 'price_adjustment']
+
+class ServiceQuestionResponseSerializer(serializers.Serializer):
+    """Serializer for submitting service question responses"""
+    service_id = serializers.UUIDField()
+    responses = serializers.ListField(child=serializers.DictField())
+
+class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
+    """Serializer for package quotes"""
+    package_name = serializers.CharField(source='package.name', read_only=True)
+    package_description = serializers.CharField(source='package.description', read_only=True, default='')
+    service_name = serializers.CharField(source='service_selection.service.name', read_only=True)
+    included_features_details = serializers.SerializerMethodField()
+    excluded_features_details = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CustomerPackageQuote
+        fields = [
+            'id', 'package', 'package_name', 'package_description', 'service_name',
+            'base_price', 'sqft_price', 'question_adjustments',
+            'surcharge_amount', 'total_price', 'is_selected',
+            'included_features', 'excluded_features',
+            'included_features_details', 'excluded_features_details'
+        ]
+    
+    def get_included_features_details(self, obj):
+        if not obj.included_features:
+            return []
+        features = Feature.objects.filter(id__in=obj.included_features)
+        return FeaturePublicSerializer(features, many=True).data
+    
+    def get_excluded_features_details(self, obj):
+        if not obj.excluded_features:
+            return []
+        features = Feature.objects.filter(id__in=obj.excluded_features)
+        return FeaturePublicSerializer(features, many=True).data
+
+
+class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for customer submissions"""
+    location_details = LocationPublicSerializer(source='location', read_only=True)
+    service_selections = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CustomerSubmission
+        fields = [
+            'id', 'customer_name', 'customer_email', 'customer_phone',
+            'customer_address', 'house_sqft', 'location', 'location_details',
+            'status', 'total_base_price', 'total_adjustments',
+            'total_surcharges', 'final_total', 'created_at',
+            'expires_at', 'service_selections'
+        ]
+    
+    def get_service_selections(self, obj):
+        selections = obj.customerserviceselection_set.all().prefetch_related(
+            'package_quotes__package',
+            'question_responses__option_responses',
+            'question_responses__sub_question_responses'
+        )
+        return CustomerServiceSelectionDetailSerializer(selections, many=True).data
+
+class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for service selections"""
+    service_details = ServicePublicSerializer(source='service', read_only=True)
+    selected_package_details = PackagePublicSerializer(source='selected_package', read_only=True)
+    package_quotes = serializers.SerializerMethodField()
+    question_responses = CustomerQuestionResponseSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = CustomerServiceSelection
+        fields = [
+            'id', 'service', 'service_details', 'selected_package', 'selected_package_details',
+            'question_adjustments', 'surcharge_applicable', 'surcharge_amount',
+            'final_base_price', 'final_sqft_price', 'final_total_price',
+            'package_quotes', 'question_responses'
+        ]
+    
+    def get_package_quotes(self, obj):
+        # Only return selected quote if packages are selected, otherwise all quotes
+        if obj.selected_package:
+            quotes = obj.package_quotes.filter(is_selected=True)
+        else:
+            quotes = obj.package_quotes.all().order_by('package__order')
+        return CustomerPackageQuoteSerializer(quotes, many=True).data
+    
+    
+
+# Utility serializers
+class PricingCalculationRequestSerializer(serializers.Serializer):
+    """Serializer for pricing calculation requests"""
+    submission_id = serializers.UUIDField()
+    service_responses = ServiceQuestionResponseSerializer(many=True)
+
+class ConditionalQuestionRequestSerializer(serializers.Serializer):
+    """Serializer for conditional question requests"""
+    parent_question_id = serializers.UUIDField()
+    answer = serializers.CharField(required=False, allow_blank=True)
+    option_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class PackageSelectionSerializer(serializers.Serializer):
+    """Serializer for package selection"""
+    service_selection_id = serializers.UUIDField()
+    package_id = serializers.UUIDField()
