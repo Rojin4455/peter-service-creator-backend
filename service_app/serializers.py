@@ -324,6 +324,20 @@ class QuestionSerializer(serializers.ModelSerializer):
         return []
 
 
+class ServiceSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceSettings
+        fields = [
+            'id',
+            'general_disclaimer',
+            'bid_in_person_disclaimer',
+            'apply_area_minimum',
+            'apply_house_size_minimum',
+            'apply_trip_charge_to_bid',
+            'enable_dollar_minimum',
+        ]
+
+
 
 class ServiceSerializer(serializers.ModelSerializer):
     """Serializer for Service model"""
@@ -331,6 +345,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     features = FeatureSerializer(many=True, read_only=True)  # Assuming you have this
     questions = serializers.SerializerMethodField(read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    settings = ServiceSettingsSerializer(read_only=True)
 
     class Meta:
         model = Service
@@ -543,20 +558,6 @@ class ServiceAnalyticsSerializer(serializers.Serializer):
     average_package_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     created_at = serializers.DateTimeField()
 
-
-
-class ServiceSettingsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ServiceSettings
-        fields = [
-            'id',
-            'general_disclaimer',
-            'bid_in_person_disclaimer',
-            'apply_area_minimum',
-            'apply_house_size_minimum',
-            'apply_trip_charge_to_bid',
-            'enable_dollar_minimum',
-        ]
 
 
 

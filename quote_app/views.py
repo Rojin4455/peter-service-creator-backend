@@ -457,6 +457,246 @@ class SubmitServiceResponsesView(APIView):
                 }
             )
 
+
+    def _generate_all_package_quotes(self, service_selection, submission):
+        """Generate quotes for ALL packages in the service"""
+        service = service_selection.service
+        packages = Package.objects.filter(service=service, is_active=True)
+        
+        # Get square footage pricing
+        sqft_mappings = ServicePackageSizeMapping.objects.filter(
+            service_package__service=service,
+            global_size__min_sqft__lte=submission.house_sqft,
+            global_size__max_sqft__gte=submission.house_sqft
+        ).select_related('service_package', 'global_size')
+        
+        # Create mapping dict for quick lookup
+        sqft_pricing = {mapping.service_package_id: mapping.price for mapping in sqft_mappings}
+        
+        # Check if location surcharge applies
+        surcharge_amount = Decimal('0.00')
+        if submission.location and hasattr(service, 'settings'):
+            try:
+                settings = service.settings
+                if settings.apply_trip_charge_to_bid:
+                    surcharge_amount = submission.location.trip_surcharge
+                    service_selection.surcharge_applicable = True
+                    service_selection.surcharge_amount = surcharge_amount
+                    service_selection.save()
+            except ServiceSettings.DoesNotExist:
+                # Service doesn't have settings, no surcharge
+                pass
+        
+        # Clear existing quotes for this service
+        service_selection.package_quotes.all().delete()
+        
+        # Generate quotes for each package
+        for package in packages:
+            base_price = package.base_price
+            sqft_price = sqft_pricing.get(package.id, Decimal('0.00'))
+            
+            # Calculate package-specific question adjustments
+            question_adjustments = self._calculate_package_specific_adjustments(
+                service_selection, package
+            )
+            
+            total_price = base_price + sqft_price + question_adjustments + surcharge_amount
+            
+            # Get package features
+            package_features = PackageFeature.objects.filter(package=package).select_related('feature')
+            included_features = [str(pf.feature.id) for pf in package_features if pf.is_included]
+            excluded_features = [str(pf.feature.id) for pf in package_features if not pf.is_included]
+            
+            CustomerPackageQuote.objects.create(
+                service_selection=service_selection,
+                package=package,
+                base_price=base_price,
+                sqft_price=sqft_price,
+                question_adjustments=question_adjustments,
+                surcharge_amount=surcharge_amount,
+                total_price=total_price,
+                included_features=included_features,
+                excluded_features=excluded_features,
+                is_selected=False  # Initially not selected
+            )
+
+    def _calculate_package_specific_adjustments(self, service_selection, package):
+        """Calculate question adjustments specific to a package"""
+        total_adjustment = Decimal('0.00')
+        
+        for question_response in service_selection.question_responses.all():
+            question = question_response.question
+            
+            # Handle different question types
+            if question.question_type == 'yes_no':
+                if question_response.yes_no_answer is True:
+                    pricing = QuestionPricing.objects.filter(
+                        question=question, package=package
+                    ).first()
+                    if pricing and pricing.yes_pricing_type != 'ignore':
+                        if pricing.yes_pricing_type == 'upcharge_percent':
+                            total_adjustment += pricing.yes_value
+                        elif pricing.yes_pricing_type == 'discount_percent':
+                            total_adjustment -= pricing.yes_value
+                        elif pricing.yes_pricing_type == 'fixed_price':
+                            total_adjustment += pricing.yes_value
+            
+            elif question.question_type in ['describe', 'quantity']:
+                for option_response in question_response.option_responses.all():
+                    pricing = OptionPricing.objects.filter(
+                        option=option_response.option, package=package
+                    ).first()
+                    if pricing and pricing.pricing_type != 'ignore':
+                        if pricing.pricing_type == 'per_quantity':
+                            adjustment = pricing.value * option_response.quantity
+                        elif pricing.pricing_type == 'upcharge_percent':
+                            adjustment = pricing.value
+                        elif pricing.pricing_type == 'discount_percent':
+                            adjustment = -pricing.value
+                        elif pricing.pricing_type == 'fixed_price':
+                            adjustment = pricing.value
+                        else:
+                            adjustment = pricing.value
+                        
+                        total_adjustment += adjustment
+            
+            elif question.question_type == 'multiple_yes_no':
+                for sub_response in question_response.sub_question_responses.all():
+                    if sub_response.answer is True:
+                        pricing = SubQuestionPricing.objects.filter(
+                            sub_question=sub_response.sub_question, package=package
+                        ).first()
+                        if pricing and pricing.yes_pricing_type != 'ignore':
+                            if pricing.yes_pricing_type == 'upcharge_percent':
+                                total_adjustment += pricing.yes_value
+                            elif pricing.yes_pricing_type == 'discount_percent':
+                                total_adjustment -= pricing.yes_value
+                            elif pricing.yes_pricing_type == 'fixed_price':
+                                total_adjustment += pricing.yes_value
+            
+            # Handle conditional questions
+            elif question.question_type == 'conditional':
+                # Check if the condition is met before applying pricing
+                if self._is_conditional_question_condition_met(question_response, service_selection):
+                    if question_response.yes_no_answer is True:
+                        pricing = QuestionPricing.objects.filter(
+                            question=question, package=package
+                        ).first()
+                        if pricing and pricing.yes_pricing_type != 'ignore':
+                            if pricing.yes_pricing_type == 'upcharge_percent':
+                                total_adjustment += pricing.yes_value
+                            elif pricing.yes_pricing_type == 'discount_percent':
+                                total_adjustment -= pricing.yes_value
+                            elif pricing.yes_pricing_type == 'fixed_price':
+                                total_adjustment += pricing.yes_value
+        
+        return total_adjustment
+
+    def _is_conditional_question_condition_met(self, question_response, service_selection):
+        """Check if a conditional question's condition is met"""
+        question = question_response.question
+        
+        if not question.parent_question:
+            return True  # Not a conditional question
+        
+        # Find the parent question response
+        parent_response = service_selection.question_responses.filter(
+            question=question.parent_question
+        ).first()
+        
+        if not parent_response:
+            return False  # Parent not answered
+        
+        # Check condition based on parent question type
+        if question.parent_question.question_type == 'yes_no':
+            expected_answer = question.condition_answer
+            actual_answer = 'yes' if parent_response.yes_no_answer else 'no'
+            return expected_answer == actual_answer
+        
+        elif question.parent_question.question_type in ['describe', 'quantity']:
+            if question.condition_option:
+                # Check if the specific option was selected
+                selected_options = parent_response.option_responses.all()
+                selected_option_ids = [opt.option.id for opt in selected_options]
+                return question.condition_option.id in selected_option_ids
+        
+        return False
+
+    def _check_all_services_completed(self, submission):
+        """Check if all selected services have responses"""
+        service_selections = submission.customerserviceselection_set.all()
+        
+        for selection in service_selections:
+            # Check if this service has any question responses
+            if not selection.question_responses.exists():
+                return False
+            
+            # Get all root questions (non-conditional) for this service
+            root_questions = Question.objects.filter(
+                service=selection.service,
+                is_active=True,
+                parent_question__isnull=True
+            )
+            
+            # Check if all root questions have responses
+            answered_question_ids = set(
+                selection.question_responses.values_list('question_id', flat=True)
+            )
+            
+            for root_question in root_questions:
+                if root_question.id not in answered_question_ids:
+                    return False
+                
+                # Check conditional questions if they should be answered
+                conditional_questions = Question.objects.filter(
+                    parent_question=root_question,
+                    is_active=True
+                )
+                
+                for conditional_question in conditional_questions:
+                    # Check if condition is met
+                    root_response = selection.question_responses.filter(
+                        question=root_question
+                    ).first()
+                    
+                    if self._should_conditional_question_be_answered(
+                        conditional_question, root_response
+                    ):
+                        if conditional_question.id not in answered_question_ids:
+                            return False
+        
+        return True
+
+    def _should_conditional_question_be_answered(self, conditional_question, parent_response):
+        """Check if a conditional question should be answered based on parent response"""
+        if not parent_response:
+            return False
+        
+        parent_question = conditional_question.parent_question
+        
+        # For yes/no parent questions
+        if parent_question.question_type == 'yes_no':
+            expected_answer = conditional_question.condition_answer
+            actual_answer = 'yes' if parent_response.yes_no_answer else 'no'
+            return expected_answer == actual_answer
+        
+        # For option-based parent questions
+        elif parent_question.question_type in ['describe', 'quantity']:
+            if conditional_question.condition_option:
+                selected_options = parent_response.option_responses.all()
+                selected_option_ids = [opt.option.id for opt in selected_options]
+                return conditional_question.condition_option.id in selected_option_ids
+        
+        # For multiple_yes_no parent questions
+        elif parent_question.question_type == 'multiple_yes_no':
+            # This would depend on your specific business logic
+            # For example, show conditional if any sub-question is answered yes
+            sub_responses = parent_response.sub_question_responses.all()
+            return any(sub.answer for sub in sub_responses)
+        
+        return False
+
+
 # Step 7: Get submission details with quotes
 class SubmissionDetailView(generics.RetrieveAPIView):
     """Get detailed submission with all quotes"""
