@@ -25,7 +25,7 @@ from .serializers import (
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,
-    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer
+    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
 
 # Step 1: Get initial data (locations, services, size ranges)
@@ -162,7 +162,7 @@ class ConditionalQuestionsView(APIView):
 
 # Step 6: Submit service responses and calculate pricing
 class SubmitServiceResponsesView(APIView):
-    """Submit responses for a service and calculate pricing"""
+    """Submit responses for a service including conditional questions"""
     permission_classes = [AllowAny]
     
     def post(self, request, submission_id, service_id):
@@ -177,13 +177,23 @@ class SubmitServiceResponsesView(APIView):
         
         try:
             with transaction.atomic():
+                # Validate conditional question logic first
+                validation_result = self._validate_conditional_responses(responses, service_id)
+                if not validation_result['valid']:
+                    return Response({
+                        'error': 'Invalid conditional question responses',
+                        'details': validation_result['errors']
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
                 # Clear existing responses
                 service_selection.question_responses.all().delete()
                 
+                # Process responses in dependency order (parents first, then children)
+                ordered_responses = self._order_responses_by_dependency(responses)
+                
                 total_adjustment = Decimal('0.00')
                 
-                # Process each response
-                for response_data in responses:
+                for response_data in ordered_responses:
                     question_id = response_data['question_id']
                     question = get_object_or_404(Question, id=question_id)
                     
@@ -195,6 +205,7 @@ class SubmitServiceResponsesView(APIView):
                         text_answer=response_data.get('text_answer', '')
                     )
                     
+                    # Calculate pricing adjustment
                     question_adjustment = self._calculate_question_adjustment(
                         question, response_data, question_response, service_selection
                     )
@@ -208,13 +219,113 @@ class SubmitServiceResponsesView(APIView):
                 service_selection.question_adjustments = total_adjustment
                 service_selection.save()
                 
-                # Generate package quotes
-                self._generate_package_quotes(service_selection, submission)
+                # Generate package quotes for ALL packages
+                self._generate_all_package_quotes(service_selection, submission)
                 
-                return Response({'message': 'Responses submitted successfully'})
+                # Check if all services have responses
+                all_services_completed = self._check_all_services_completed(submission)
+                all_services_completed = True
+                if all_services_completed:
+                    submission.status = 'responses_completed'
+                    submission.save()
+                
+                return Response({
+                    'message': 'Responses submitted successfully',
+                    'all_services_completed': all_services_completed,
+                    'total_questions_answered': len(ordered_responses),
+                    'conditional_questions_answered': len([r for r in responses if r.get('parent_question_id')])
+                })
         
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def _validate_conditional_responses(self, responses, service_id):
+        """Validate that conditional questions are only answered when conditions are met"""
+        validation_errors = []
+        
+        # Create lookup maps
+        responses_by_question = {r['question_id']: r for r in responses}
+        
+        for response in responses:
+            question_id = response['question_id']
+            
+            # Skip validation for non-conditional questions
+            if not response.get('parent_question_id'):
+                continue
+                
+            try:
+                question = Question.objects.get(id=question_id)
+                parent_question_id = response['parent_question_id']
+                
+                # Check if parent question was answered
+                if parent_question_id not in responses_by_question:
+                    validation_errors.append(
+                        f"Conditional question {question_id} answered but parent {parent_question_id} not found"
+                    )
+                    continue
+                
+                parent_response = responses_by_question[parent_question_id]
+                parent_question = Question.objects.get(id=parent_question_id)
+                
+                # Validate condition based on type
+                condition_met = self._check_condition_met(
+                    parent_question, parent_response, question, response
+                )
+                
+                if not condition_met:
+                    validation_errors.append(
+                        f"Conditional question {question_id} answered but condition not met"
+                    )
+                    
+            except Question.DoesNotExist:
+                validation_errors.append(f"Question {question_id} not found")
+        
+        return {
+            'valid': len(validation_errors) == 0,
+            'errors': validation_errors
+        }
+    
+    def _check_condition_met(self, parent_question, parent_response, conditional_question, conditional_response):
+        """Check if the condition for a conditional question is met"""
+        
+        # For yes/no parent questions
+        if parent_question.question_type == 'yes_no':
+            expected_answer = conditional_question.condition_answer
+            actual_answer = 'yes' if parent_response.get('yes_no_answer') else 'no'
+            return expected_answer == actual_answer
+        
+        # For option-based parent questions (describe/quantity)
+        elif parent_question.question_type in ['describe', 'quantity']:
+            expected_option_id = str(conditional_question.condition_option_id) if conditional_question.condition_option_id else None
+            selected_options = parent_response.get('selected_options', [])
+            selected_option_ids = [str(opt['option_id']) for opt in selected_options]
+            
+            return expected_option_id in selected_option_ids
+        
+        # For multiple_yes_no parent questions
+        elif parent_question.question_type == 'multiple_yes_no':
+            # This would need custom logic based on your requirements
+            # For now, assume condition is met if any sub-question is answered yes
+            sub_answers = parent_response.get('sub_question_answers', [])
+            return any(sub['answer'] for sub in sub_answers)
+        
+        return False
+    
+    def _order_responses_by_dependency(self, responses):
+        """Order responses so parent questions are processed before conditional questions"""
+        parent_responses = []
+        conditional_responses = []
+        
+        for response in responses:
+            if response.get('parent_question_id'):
+                conditional_responses.append(response)
+            else:
+                parent_responses.append(response)
+        
+        # Sort conditional responses by their parent order
+        conditional_responses.sort(key=lambda x: x.get('parent_question_id', ''))
+        
+        return parent_responses + conditional_responses
     
     def _calculate_question_adjustment(self, question, response_data, question_response, service_selection):
         """Calculate price adjustment for a question response"""

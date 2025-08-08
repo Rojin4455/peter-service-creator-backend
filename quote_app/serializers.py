@@ -244,3 +244,75 @@ class PackageSelectionSerializer(serializers.Serializer):
     """Serializer for package selection"""
     service_selection_id = serializers.UUIDField()
     package_id = serializers.UUIDField()
+
+
+
+
+class ConditionalQuestionResponseSerializer(serializers.Serializer):
+    """Enhanced serializer for question responses including conditional logic"""
+    question_id = serializers.UUIDField()
+    question_type = serializers.CharField()
+    
+    # For conditional questions
+    parent_question_id = serializers.UUIDField(required=False, allow_null=True)
+    condition_type = serializers.CharField(required=False, allow_blank=True)
+    condition_value = serializers.CharField(required=False, allow_blank=True)
+    
+    # Response data based on question type
+    yes_no_answer = serializers.BooleanField(required=False, allow_null=True)
+    text_answer = serializers.CharField(required=False, allow_blank=True)
+    
+    # For option-based questions
+    selected_options = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True
+    )
+    
+    # For multiple_yes_no questions
+    sub_question_answers = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True
+    )
+    
+    def validate(self, data):
+        """Validate response data based on question type"""
+        question_type = data.get('question_type')
+        
+        if question_type == 'yes_no':
+            if data.get('yes_no_answer') is None:
+                raise serializers.ValidationError("yes_no_answer is required for yes_no questions")
+        
+        elif question_type in ['describe', 'quantity']:
+            if not data.get('selected_options'):
+                raise serializers.ValidationError("selected_options is required for describe/quantity questions")
+        
+        elif question_type == 'multiple_yes_no':
+            if not data.get('sub_question_answers'):
+                raise serializers.ValidationError("sub_question_answers is required for multiple_yes_no questions")
+        
+        # Validate conditional question requirements
+        if data.get('parent_question_id'):
+            if not data.get('condition_type') or not data.get('condition_value'):
+                raise serializers.ValidationError(
+                    "condition_type and condition_value are required for conditional questions"
+                )
+        
+        return data
+
+class ServiceResponseSubmissionSerializer(serializers.Serializer):
+    """Serializer for the complete service response submission"""
+    responses = ConditionalQuestionResponseSerializer(many=True)
+    
+    def validate_responses(self, value):
+        """Validate the responses list"""
+        if not value:
+            raise serializers.ValidationError("At least one response is required")
+        
+        # Check for duplicate question responses
+        question_ids = [r['question_id'] for r in value]
+        if len(question_ids) != len(set(question_ids)):
+            raise serializers.ValidationError("Duplicate question responses found")
+        
+        return value
