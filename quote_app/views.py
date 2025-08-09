@@ -24,7 +24,7 @@ from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,
-    ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,
+    ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
 
@@ -726,43 +726,132 @@ class SubmitFinalQuoteView(APIView):
     def post(self, request, submission_id):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         
+        # Check if packages are already selected (from Step 8)
+        print("submission status: ", submission.status)
+        print("data: , :",request.data)
+        if submission.status == 'packages_selected':
+            # Packages already selected, just need final confirmation
+            serializer = SubmitFinalQuoteSerializer(data=request.data)
+        elif submission.status == 'responses_completed':
+            # Need to select packages first, then submit
+            serializer = SubmitFinalQuoteSerializer(data=request.data)
+            if not request.data.get('selected_packages'):
+                return Response({
+                    'error': 'Please select packages first or use the package selection endpoint'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({
+                'error': f'Invalid submission status: {submission.status}. Complete all steps first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
             with transaction.atomic():
-                # Calculate final totals
-                service_selections = submission.customerserviceselection_set.all()
+                # If packages are provided in payload, update selections
+                if serializer.validated_data.get('selected_packages'):
+                    self._update_package_selections(submission, serializer.validated_data['selected_packages'])
                 
-                total_base_price = Decimal('0.00')
-                total_adjustments = Decimal('0.00')
-                total_surcharges = Decimal('0.00')
-                
-                for selection in service_selections:
-                    quotes = selection.package_quotes.all()
-                    if quotes:
-                        # Use the first package as default (you might want to let user choose)
-                        quote = quotes.first()
-                        total_base_price += quote.base_price + quote.sqft_price
-                        total_adjustments += quote.question_adjustments
-                        total_surcharges += quote.surcharge_amount
-                
-                final_total = total_base_price + total_adjustments + total_surcharges
-                
-                # Update submission
-                submission.total_base_price = total_base_price
-                submission.total_adjustments = total_adjustments
-                submission.total_surcharges = total_surcharges
-                submission.final_total = final_total
+                # Update submission with additional information
                 submission.status = 'submitted'
+                
+                # Store additional submission details
+                additional_data = {
+                    'additional_notes': serializer.validated_data.get('additional_notes', ''),
+                    'preferred_contact_method': serializer.validated_data.get('preferred_contact_method', 'email'),
+                    'preferred_start_date': serializer.validated_data.get('preferred_start_date'),
+                    'marketing_consent': serializer.validated_data.get('marketing_consent', False),
+                    'submitted_at': timezone.now().isoformat()
+                }
+                
+                # You might want to store this in a separate field or model
+                # For now, we'll add it to a JSON field if you have one
+                # submission.additional_data = additional_data
+                
                 submission.save()
+                
+                # Calculate final totals if not already done
+                if submission.final_total == Decimal('0.00'):
+                    self._calculate_final_totals(submission)
+                
+                # Here you might want to:
+                # 1. Send confirmation email to customer
+                # 2. Notify admin/sales team
+                # 3. Create order record
+                # 4. Generate PDF quote
                 
                 return Response({
                     'message': 'Quote submitted successfully',
                     'submission_id': submission.id,
-                    'final_total': final_total,
-                    'quote_url': f'/quote/{submission.id}/'
+                    'final_total': submission.final_total,
+                    'quote_url': f'/quote/{submission.id}/',
+                    'status': submission.status,
+                    'submitted_at': timezone.now().isoformat()
                 })
         
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def _update_package_selections(self, submission, selected_packages):
+        """Update package selections if provided in payload"""
+        for package_data in selected_packages:
+            service_selection = get_object_or_404(
+                CustomerServiceSelection,
+                id=package_data['service_selection_id'],
+                submission=submission
+            )
+            
+            package = get_object_or_404(Package, id=package_data['package_id'])
+            
+            # Update service selection
+            service_selection.selected_package = package
+            
+            # Get the quote for this package
+            quote = get_object_or_404(
+                CustomerPackageQuote,
+                service_selection=service_selection,
+                package=package
+            )
+            
+            service_selection.final_base_price = quote.base_price + quote.sqft_price
+            service_selection.final_sqft_price = quote.sqft_price
+            service_selection.final_total_price = quote.total_price
+            service_selection.save()
+            
+            # Mark this quote as selected
+            service_selection.package_quotes.update(is_selected=False)
+            quote.is_selected = True
+            quote.save()
+        
+        # Update submission status
+        submission.status = 'packages_selected'
+        submission.save()
+    
+    def _calculate_final_totals(self, submission):
+        """Calculate final totals for the submission"""
+        service_selections = submission.customerserviceselection_set.filter(
+            selected_package__isnull=False
+        )
+        
+        total_base_price = Decimal('0.00')
+        total_adjustments = Decimal('0.00')
+        total_surcharges = Decimal('0.00')
+        
+        for selection in service_selections:
+            selected_quote = selection.package_quotes.filter(is_selected=True).first()
+            if selected_quote:
+                total_base_price += selected_quote.base_price + selected_quote.sqft_price
+                total_adjustments += selected_quote.question_adjustments
+                total_surcharges += selected_quote.surcharge_amount
+        
+        final_total = total_base_price + total_adjustments + total_surcharges
+        
+        submission.total_base_price = total_base_price
+        submission.total_adjustments = total_adjustments
+        submission.total_surcharges = total_surcharges
+        submission.final_total = final_total
+        submission.save()
 
 # Utility views
 class SubmissionStatusView(APIView):

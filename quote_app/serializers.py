@@ -316,3 +316,36 @@ class ServiceResponseSubmissionSerializer(serializers.Serializer):
             raise serializers.ValidationError("Duplicate question responses found")
         
         return value
+    
+
+
+
+class SelectedPackageSerializer(serializers.Serializer):
+    """Serializer for selected package information"""
+    service_selection_id = serializers.UUIDField()
+    package_id = serializers.UUIDField()
+    package_name = serializers.CharField(read_only=True)
+    total_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+
+class SubmitFinalQuoteSerializer(serializers.Serializer):
+    """Serializer for final quote submission"""
+    customer_confirmation = serializers.BooleanField(default=True)
+    selected_packages = SelectedPackageSerializer(many=True, required=False)
+    additional_notes = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    preferred_contact_method = serializers.ChoiceField(
+        choices=[('email', 'Email'), ('phone', 'Phone'), ('both', 'Both')],
+        default='email'
+    )
+    preferred_start_date = serializers.DateField(required=False, allow_null=True)
+    terms_accepted = serializers.BooleanField(default=True)
+    marketing_consent = serializers.BooleanField(default=False)
+    
+    def validate_customer_confirmation(self, value):
+        if not value:
+            raise serializers.ValidationError("Customer confirmation is required")
+        return value
+    
+    def validate_terms_accepted(self, value):
+        if not value:
+            raise serializers.ValidationError("Terms and conditions must be accepted")
+        return value
