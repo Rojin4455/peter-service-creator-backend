@@ -10,7 +10,7 @@ from django.db.models import Q, Prefetch
 from decimal import Decimal
 from datetime import timedelta
 from django.utils import timezone
-
+from service_app.models import ServiceSettings
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location, 
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
@@ -169,7 +169,7 @@ class SubmitServiceResponsesView(APIView):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         service_selection = get_object_or_404(
             CustomerServiceSelection, 
-            submission=submission, 
+            submission=submission,
             service_id=service_id
         )
         
@@ -209,6 +209,8 @@ class SubmitServiceResponsesView(APIView):
                     question_adjustment = self._calculate_question_adjustment(
                         question, response_data, question_response, service_selection
                     )
+
+                    print("question_adjustment:",question_adjustment)
                     
                     question_response.price_adjustment = question_adjustment
                     question_response.save()
@@ -328,51 +330,84 @@ class SubmitServiceResponsesView(APIView):
         return parent_responses + conditional_responses
     
     def _calculate_question_adjustment(self, question, response_data, question_response, service_selection):
-        """Calculate price adjustment for a question response"""
-        total_adjustment = Decimal('0.00')
+        """FIXED: Calculate price adjustment - don't average across packages for quantity questions"""
+        
+        print(f"\n=== FIXED: Processing question: {question.question_text} ===")
+        print(f"Question type: {question.question_type}")
+        print(f"Response data: {response_data}")
         
         # Get all packages for this service
         packages = Package.objects.filter(service=question.service, is_active=True)
+        print(f"Found {packages.count()} packages for service: {question.service.name}")
+        
+        # For quantity questions, we don't calculate a single adjustment
+        # Instead, we store the responses and calculate per-package in _calculate_package_specific_adjustments
+        total_adjustment = Decimal('0.00')  # This will be 0 for quantity questions
         
         if question.question_type == 'yes_no':
             if response_data.get('yes_no_answer') is True:
+                package_adjustments = []
                 for package in packages:
                     pricing = QuestionPricing.objects.filter(
                         question=question, package=package
                     ).first()
                     if pricing and pricing.yes_pricing_type != 'ignore':
-                        total_adjustment += pricing.yes_value
+                        package_adjustments.append(pricing.yes_value)
+                        print(f"Yes/No adjustment for {package.name}: {pricing.yes_value}")
+                
+                if package_adjustments:
+                    total_adjustment = sum(package_adjustments) / len(package_adjustments)
         
         elif question.question_type in ['describe', 'quantity']:
             selected_options = response_data.get('selected_options', [])
+            print(f"Selected options: {selected_options}")
+            
             for option_data in selected_options:
                 option_id = option_data['option_id']
                 quantity = option_data.get('quantity', 1)
                 
-                option = get_object_or_404(QuestionOption, id=option_id)
+                print(f"\nProcessing option {option_id} with quantity {quantity}")
                 
-                # Create option response
+                option = get_object_or_404(QuestionOption, id=option_id)
+                print(f"Option text: {option.option_text}")
+                
+                # Create option response - store the quantity for later package-specific calculations
                 option_response = CustomerOptionResponse.objects.create(
                     question_response=question_response,
                     option=option,
                     quantity=quantity
                 )
+                print(f"Created option response with quantity: {option_response.quantity}")
                 
-                # Calculate option pricing
-                option_adjustment = Decimal('0.00')
-                for package in packages:
-                    pricing = OptionPricing.objects.filter(
-                        option=option, package=package
-                    ).first()
-                    if pricing and pricing.pricing_type != 'ignore':
-                        if pricing.pricing_type == 'per_quantity':
-                            option_adjustment += pricing.value * quantity
-                        else:
-                            option_adjustment += pricing.value
+                # For quantity questions, don't calculate adjustment here
+                # It will be calculated per-package in _calculate_package_specific_adjustments
+                if question.question_type == 'quantity':
+                    print(f"Quantity question - adjustment will be calculated per package")
+                    option_response.price_adjustment = Decimal('0.00')  # Store 0 for now
+                    option_response.save()
+                    # Don't add to total_adjustment
                 
-                option_response.price_adjustment = option_adjustment
-                option_response.save()
-                total_adjustment += option_adjustment
+                # For describe questions, calculate average as before
+                elif question.question_type == 'describe':
+                    package_adjustments = []
+                    
+                    for package in packages:
+                        pricing = OptionPricing.objects.filter(
+                            option=option, package=package
+                        ).first()
+                        
+                        if pricing and pricing.pricing_type != 'ignore':
+                            if pricing.pricing_type == 'per_quantity':
+                                package_adjustment = pricing.value * quantity
+                            else:
+                                package_adjustment = pricing.value
+                            package_adjustments.append(package_adjustment)
+                    
+                    if package_adjustments:
+                        option_adjustment = sum(package_adjustments) / len(package_adjustments)
+                        option_response.price_adjustment = option_adjustment
+                        option_response.save()
+                        total_adjustment += option_adjustment
         
         elif question.question_type == 'multiple_yes_no':
             sub_question_answers = response_data.get('sub_question_answers', [])
@@ -388,7 +423,7 @@ class SubmitServiceResponsesView(APIView):
                         answer=True
                     )
                     
-                    # Calculate sub-question pricing
+                    # Calculate sub-question pricing (average across packages)
                     sub_adjustment = Decimal('0.00')
                     for package in packages:
                         pricing = SubQuestionPricing.objects.filter(
@@ -396,12 +431,19 @@ class SubmitServiceResponsesView(APIView):
                         ).first()
                         if pricing and pricing.yes_pricing_type != 'ignore':
                             sub_adjustment += pricing.yes_value
+                            print(f"Sub-question adjustment for {package.name}: {pricing.yes_value}")
+                    
+                    # Average across packages
+                    if packages.count() > 0:
+                        sub_adjustment = sub_adjustment / packages.count()
                     
                     sub_response.price_adjustment = sub_adjustment
                     sub_response.save()
                     total_adjustment += sub_adjustment
         
+        print(f"=== Final question adjustment (for averaging): {total_adjustment} ===\n")
         return total_adjustment
+
     
     def _generate_package_quotes(self, service_selection, submission):
         """Generate package quotes for the service"""
@@ -479,6 +521,7 @@ class SubmitServiceResponsesView(APIView):
             try:
                 settings = service.settings
                 if settings.apply_trip_charge_to_bid:
+                    # print()
                     surcharge_amount = submission.location.trip_surcharge
                     service_selection.surcharge_applicable = True
                     service_selection.surcharge_amount = surcharge_amount
@@ -521,11 +564,16 @@ class SubmitServiceResponsesView(APIView):
             )
 
     def _calculate_package_specific_adjustments(self, service_selection, package):
-        """Calculate question adjustments specific to a package"""
+        """FIXED: Calculate question adjustments specific to a package - proper per-package calculation"""
         total_adjustment = Decimal('0.00')
+        
+        print(f"\n=== CALCULATING ADJUSTMENTS FOR PACKAGE: {package.name} ===")
         
         for question_response in service_selection.question_responses.all():
             question = question_response.question
+            question_adjustment = Decimal('0.00')
+            
+            print(f"\nQuestion: {question.question_text} (Type: {question.question_type})")
             
             # Handle different question types
             if question.question_type == 'yes_no':
@@ -535,30 +583,68 @@ class SubmitServiceResponsesView(APIView):
                     ).first()
                     if pricing and pricing.yes_pricing_type != 'ignore':
                         if pricing.yes_pricing_type == 'upcharge_percent':
-                            total_adjustment += pricing.yes_value
+                            question_adjustment = pricing.yes_value
                         elif pricing.yes_pricing_type == 'discount_percent':
-                            total_adjustment -= pricing.yes_value
+                            question_adjustment = -pricing.yes_value
                         elif pricing.yes_pricing_type == 'fixed_price':
-                            total_adjustment += pricing.yes_value
+                            question_adjustment = pricing.yes_value
+                        
+                        print(f"  Yes/No adjustment: {question_adjustment}")
             
             elif question.question_type in ['describe', 'quantity']:
+                print(f"  Processing {question_response.option_responses.count()} option responses")
+                
                 for option_response in question_response.option_responses.all():
+                    print(f"    Option: {option_response.option.option_text}")
+                    print(f"    Quantity: {option_response.quantity}")
+                    
                     pricing = OptionPricing.objects.filter(
                         option=option_response.option, package=package
                     ).first()
-                    if pricing and pricing.pricing_type != 'ignore':
+                    
+                    if not pricing:
+                        print(f"    No pricing found for this option and package")
+                        continue
+                    
+                    print(f"    Pricing found - Type: {pricing.pricing_type}, Value: {pricing.value}")
+                    
+                    option_adjustment = Decimal('0.00')
+                    
+                    # Handle quantity questions - ALWAYS multiply by quantity
+                    if question.question_type == 'quantity':
+                        if pricing.pricing_type == "discount_percent":
+                            option_adjustment = -(pricing.value * option_response.quantity)
+                            print(f"    Discount calculation: -{pricing.value} * {option_response.quantity} = {option_adjustment}")
+                        elif pricing.pricing_type == "upcharge_percent":
+                            option_adjustment = pricing.value * option_response.quantity
+                            print(f"    Upcharge calculation: {pricing.value} * {option_response.quantity} = {option_adjustment}")
+                        elif pricing.pricing_type == "per_quantity":
+                            option_adjustment = pricing.value * option_response.quantity
+                            print(f"    Per quantity calculation: {pricing.value} * {option_response.quantity} = {option_adjustment}")
+                        elif pricing.pricing_type == "fixed_price":
+                            option_adjustment = pricing.value * option_response.quantity  # Even fixed price gets multiplied for quantity questions
+                            print(f"    Fixed price * quantity: {pricing.value} * {option_response.quantity} = {option_adjustment}")
+                        # ignore = no change
+                    
+                    # Handle describe questions with standard logic
+                    elif question.question_type == 'describe':
                         if pricing.pricing_type == 'per_quantity':
-                            adjustment = pricing.value * option_response.quantity
-                        elif pricing.pricing_type == 'upcharge_percent':
-                            adjustment = pricing.value
-                        elif pricing.pricing_type == 'discount_percent':
-                            adjustment = -pricing.value
-                        elif pricing.pricing_type == 'fixed_price':
-                            adjustment = pricing.value
-                        else:
-                            adjustment = pricing.value
-                        
-                        total_adjustment += adjustment
+                            option_adjustment = pricing.value * option_response.quantity
+                            print(f"    Per quantity calculation: {pricing.value} * {option_response.quantity} = {option_adjustment}")
+                        elif pricing.pricing_type == "upcharge_percent":
+                            option_adjustment = pricing.value
+                            print(f"    Fixed upcharge: {option_adjustment}")
+                        elif pricing.pricing_type == "discount_percent":
+                            option_adjustment = -pricing.value
+                            print(f"    Fixed discount: {option_adjustment}")
+                        elif pricing.pricing_type == "fixed_price":
+                            option_adjustment = pricing.value
+                            print(f"    Fixed price: {option_adjustment}")
+                        # ignore = no change
+                    
+                    if pricing.pricing_type != 'ignore':
+                        question_adjustment += option_adjustment
+                        print(f"    Running question adjustment: {question_adjustment}")
             
             elif question.question_type == 'multiple_yes_no':
                 for sub_response in question_response.sub_question_responses.all():
@@ -568,29 +654,31 @@ class SubmitServiceResponsesView(APIView):
                         ).first()
                         if pricing and pricing.yes_pricing_type != 'ignore':
                             if pricing.yes_pricing_type == 'upcharge_percent':
-                                total_adjustment += pricing.yes_value
+                                sub_adjustment = pricing.yes_value
                             elif pricing.yes_pricing_type == 'discount_percent':
-                                total_adjustment -= pricing.yes_value
+                                sub_adjustment = -pricing.yes_value
                             elif pricing.yes_pricing_type == 'fixed_price':
-                                total_adjustment += pricing.yes_value
+                                sub_adjustment = pricing.yes_value
+                            else:
+                                sub_adjustment = pricing.yes_value
+                            
+                            question_adjustment += sub_adjustment
+                            print(f"  Sub-question adjustment: {sub_adjustment}")
             
-            # Handle conditional questions
-            elif question.question_type == 'conditional':
-                # Check if the condition is met before applying pricing
-                if self._is_conditional_question_condition_met(question_response, service_selection):
-                    if question_response.yes_no_answer is True:
-                        pricing = QuestionPricing.objects.filter(
-                            question=question, package=package
-                        ).first()
-                        if pricing and pricing.yes_pricing_type != 'ignore':
-                            if pricing.yes_pricing_type == 'upcharge_percent':
-                                total_adjustment += pricing.yes_value
-                            elif pricing.yes_pricing_type == 'discount_percent':
-                                total_adjustment -= pricing.yes_value
-                            elif pricing.yes_pricing_type == 'fixed_price':
-                                total_adjustment += pricing.yes_value
+            total_adjustment += question_adjustment
+            print(f"Question total for {package.name}: {question_adjustment}")
+            print(f"Running total for {package.name}: {total_adjustment}")
+        
+        print(f"=== FINAL PACKAGE ADJUSTMENT FOR {package.name}: {total_adjustment} ===")
+        print(f"Expected for your test case:")
+        if package.name == 'Basic':
+            print(f"Basic should be: 21*2 - 11*2 + 3*1 = 42 - 22 + 3 = 23")
+        elif package.name == 'Premium':
+            print(f"Premium should be: 2*2 + 9*2 - 20*1 = 4 + 18 - 20 = 2")
+        print("=" * 50)
         
         return total_adjustment
+
 
     def _is_conditional_question_condition_met(self, question_response, service_selection):
         """Check if a conditional question's condition is met"""

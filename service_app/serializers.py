@@ -352,7 +352,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'is_active', 'order',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
-            'questions' ,'packages', 'features', 
+            'questions' ,'packages', 'features','settings'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
 

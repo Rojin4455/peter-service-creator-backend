@@ -11,6 +11,8 @@ from .models import (
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
 )
 
+from service_app.serializers import ServiceSettingsSerializer
+
 class LocationPublicSerializer(serializers.ModelSerializer):
     """Public serializer for locations"""
     class Meta:
@@ -18,12 +20,16 @@ class LocationPublicSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'address', 'trip_surcharge']
 
 class ServicePublicSerializer(serializers.ModelSerializer):
-    """Public serializer for services"""
     packages_count = serializers.SerializerMethodField()
+    service_settings = ServiceSettingsSerializer(read_only=True, source='settings')
     
     class Meta:
         model = Service
-        fields = ['id', 'name', 'description', 'packages_count']
+        fields = ['id', 'name', 'description', 'packages_count', 'service_settings']
+    
+    # class Meta:
+    #     model = Service
+    #     fields = ['id', 'name', 'description', 'packages_count','service_settings']
     
     def get_packages_count(self, obj):
         return obj.packages.filter(is_active=True).count()
@@ -182,6 +188,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
+    print("erererereererrerere")
     
     class Meta:
         model = CustomerSubmission
