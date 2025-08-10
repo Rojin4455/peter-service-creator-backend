@@ -786,7 +786,7 @@ class SubmitServiceResponsesView(APIView):
 
 
 # Step 7: Get submission details with quotes
-class SubmissionDetailView(generics.RetrieveAPIView):
+class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     """Get detailed submission with all quotes"""
     queryset = CustomerSubmission.objects.all()
     serializer_class = CustomerSubmissionDetailSerializer

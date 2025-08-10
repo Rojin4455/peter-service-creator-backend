@@ -439,7 +439,7 @@ class GlobalSizePackage(models.Model):
     """Defines a size range globally applicable to all services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     min_sqft = models.PositiveIntegerField()
-    max_sqft = models.PositiveIntegerField()
+    max_sqft = models.PositiveIntegerField(null=True, blank=True, default=100000000)
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
