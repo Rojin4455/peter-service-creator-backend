@@ -604,6 +604,30 @@ class GlobalSizePackageSerializer(serializers.ModelSerializer):
                     )
 
         return global_size
+    
+    def update(self, instance, validated_data):
+        templates_data = validated_data.pop('template_prices', [])
+        
+        # Update basic fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Update template_prices
+        existing_templates = {t.order: t for t in instance.template_prices.all()}
+        for template_data in templates_data:
+            order = template_data.get('order')
+            if order in existing_templates:
+                # Update existing
+                template_obj = existing_templates[order]
+                for attr, value in template_data.items():
+                    setattr(template_obj, attr, value)
+                template_obj.save()
+            else:
+                # Create new
+                GlobalPackageTemplate.objects.create(global_size=instance, **template_data)
+
+        return instance
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

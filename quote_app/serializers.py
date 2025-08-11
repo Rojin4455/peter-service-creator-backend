@@ -204,7 +204,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'customer_address', 'house_sqft', 'location', 'location_details',
             'status', 'total_base_price', 'total_adjustments',
             'total_surcharges', 'final_total', 'created_at','quote_surcharge_applicable',
-            'expires_at', 'service_selections'
+            'expires_at', 'service_selections','additional_data'
         ]
     
     def get_service_selections(self, obj):

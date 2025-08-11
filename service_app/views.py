@@ -908,3 +908,10 @@ class ServiceMappedSizesAPIView(ListAPIView):
         return ServicePackageSizeMapping.objects.filter(
             service_package__service_id=service_id
         ).select_related('global_size', 'service_package')
+    
+
+
+class GlobalSizePackageDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = GlobalSizePackageSerializer
+    queryset = GlobalSizePackage.objects.all().prefetch_related('template_prices')
+    lookup_field = 'id'
