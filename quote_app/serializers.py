@@ -91,11 +91,18 @@ class CustomerSubmissionCreateSerializer(serializers.ModelSerializer):
             'customer_name', 'customer_email', 'customer_phone',
             'customer_address', 'house_sqft', 'location'
         ]
+        read_only_fields = ['customer_address']
     
     def create(self, validated_data):
         # Set expiration date (e.g., 30 days from now)
         from django.utils import timezone
         from datetime import timedelta
+        location_obj = validated_data['location']
+        # If it's an ID instead of a Location object
+        if isinstance(location_obj, (str, int)):
+            location_obj = Location.objects.get(id=location_obj)
+
+        validated_data['customer_address'] = location_obj.address
         
         submission = CustomerSubmission.objects.create(**validated_data)
         submission.expires_at = timezone.now() + timedelta(days=30)
