@@ -20,6 +20,7 @@ class CustomerSubmission(models.Model):
     customer_name = models.CharField(max_length=255)
     customer_email = models.EmailField()
     customer_phone = models.CharField(max_length=20)
+    ghl_contact_id = models.CharField(null=True, blank=True, max_length=255)
     customer_address = models.TextField()
     
     # House Information
@@ -34,7 +35,9 @@ class CustomerSubmission(models.Model):
     total_base_price = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_surcharges = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    quote_surcharge_applicable = models.BooleanField(default=False)
     final_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    additional_data = models.JSONField(default=dict, null=True,blank=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

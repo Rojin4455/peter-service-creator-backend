@@ -12,7 +12,7 @@ from datetime import timedelta
 from django.utils import timezone
 from service_app.models import ServiceSettings
 from service_app.models import (
-    Service, Package, Feature, PackageFeature, Location, 
+    Service, Package, Feature, PackageFeature, Location,
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
     ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing
 )
@@ -27,6 +27,8 @@ from .serializers import (
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
+
+from quote_app.helpers import create_or_update_ghl_contact
 
 # Step 1: Get initial data (locations, services, size ranges)
 class InitialDataView(APIView):
@@ -76,12 +78,15 @@ class AddServicesToSubmissionView(APIView):
         try:
             with transaction.atomic():
                 # Clear existing selections
-                submission.customerserviceselection_set.all().delete()
+                # submission.customerserviceselection_set.all().delete()
+                CustomerServiceSelection.objects.filter(
+                    submission=submission
+                ).exclude(service_id__in=service_ids).delete()
                 
                 # Add new selections
                 for service_id in service_ids:
                     service = get_object_or_404(Service, id=service_id, is_active=True)
-                    CustomerServiceSelection.objects.create(
+                    CustomerServiceSelection.objects.get_or_create(
                         submission=submission,
                         service=service
                     )
@@ -220,9 +225,14 @@ class SubmitServiceResponsesView(APIView):
                 # Update service selection totals
                 service_selection.question_adjustments = total_adjustment
                 service_selection.save()
-                
+                surcharge_for_submission = False
                 # Generate package quotes for ALL packages
-                self._generate_all_package_quotes(service_selection, submission)
+                if self._generate_all_package_quotes(service_selection, submission):
+                    surcharge_for_submission = True
+
+                # After all services processed
+                if surcharge_for_submission:
+                    submission.quote_surcharge_applicable = True
                 
                 # Check if all services have responses
                 all_services_completed = self._check_all_services_completed(submission)
@@ -230,6 +240,11 @@ class SubmitServiceResponsesView(APIView):
                 if all_services_completed:
                     submission.status = 'responses_completed'
                     submission.save()
+
+                create_or_update_ghl_contact(submission)
+                
+                print("submissionsssss:", submission.quote_surcharge_applicable)
+                print("submissionsssss:", submission.id)
                 
                 return Response({
                     'message': 'Responses submitted successfully',
@@ -507,9 +522,10 @@ class SubmitServiceResponsesView(APIView):
         
         # Get square footage pricing
         sqft_mappings = ServicePackageSizeMapping.objects.filter(
-            service_package__service=service,
-            global_size__min_sqft__lte=submission.house_sqft,
-            global_size__max_sqft__gte=submission.house_sqft
+            service_package__service=service
+        ).filter(
+            Q(global_size__min_sqft__lte=submission.house_sqft) &
+            (Q(global_size__max_sqft__gte=submission.house_sqft) | Q(global_size__max_sqft__isnull=True))
         ).select_related('service_package', 'global_size')
         
         # Create mapping dict for quick lookup
@@ -517,15 +533,18 @@ class SubmitServiceResponsesView(APIView):
         
         # Check if location surcharge applies
         surcharge_amount = Decimal('0.00')
+        surcharge_applied = False
         if submission.location and hasattr(service, 'settings'):
             try:
                 settings = service.settings
                 if settings.apply_trip_charge_to_bid:
-                    # print()
-                    surcharge_amount = submission.location.trip_surcharge
+                    print("reached hererer")
+                    # surcharge_amount = submission.location.trip_surcharge
                     service_selection.surcharge_applicable = True
                     service_selection.surcharge_amount = surcharge_amount
+                    surcharge_applied = True
                     service_selection.save()
+                    print("submission.surcharge_applicable",submission.quote_surcharge_applicable)
             except ServiceSettings.DoesNotExist:
                 # Service doesn't have settings, no surcharge
                 pass
@@ -562,6 +581,8 @@ class SubmitServiceResponsesView(APIView):
                 excluded_features=excluded_features,
                 is_selected=False  # Initially not selected
             )
+        return surcharge_applied
+
 
     def _calculate_package_specific_adjustments(self, service_selection, package):
         """FIXED: Calculate question adjustments specific to a package - proper per-package calculation"""
@@ -792,6 +813,8 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = CustomerSubmissionDetailSerializer
     permission_classes = [AllowAny]
     lookup_field = 'id'
+
+
     
     def get_object(self):
         submission_id = self.kwargs['id']
@@ -850,12 +873,13 @@ class SubmitFinalQuoteView(APIView):
                     'preferred_contact_method': serializer.validated_data.get('preferred_contact_method', 'email'),
                     'preferred_start_date': serializer.validated_data.get('preferred_start_date'),
                     'marketing_consent': serializer.validated_data.get('marketing_consent', False),
+                    'signature': serializer.validated_data.get('signature', ""),
                     'submitted_at': timezone.now().isoformat()
                 }
                 
                 # You might want to store this in a separate field or model
                 # For now, we'll add it to a JSON field if you have one
-                # submission.additional_data = additional_data
+                submission.additional_data = additional_data
                 
                 submission.save()
                 

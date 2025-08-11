@@ -818,17 +818,21 @@ class ServiceSettingsView(APIView):
             return Response(serializer.data)
         except ServiceSettings.DoesNotExist:
             return Response({"detail": "Settings not found."}, status=status.HTTP_404_NOT_FOUND)
-
     def post(self, request, service_id):
         service = get_object_or_404(Service, id=service_id)
-        if hasattr(service, 'settings'):
-            return Response({"detail": "Settings already exist."}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = ServiceSettingsSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(service=service)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+
+        settings, created = ServiceSettings.objects.update_or_create(
+            service=service,
+            defaults=serializer.validated_data
+        )
+
+        return Response(
+            ServiceSettingsSerializer(settings).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
 
     def put(self, request, service_id):
         service = get_object_or_404(Service, id=service_id)

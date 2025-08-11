@@ -196,7 +196,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'id', 'customer_name', 'customer_email', 'customer_phone',
             'customer_address', 'house_sqft', 'location', 'location_details',
             'status', 'total_base_price', 'total_adjustments',
-            'total_surcharges', 'final_total', 'created_at',
+            'total_surcharges', 'final_total', 'created_at','quote_surcharge_applicable',
             'expires_at', 'service_selections'
         ]
     
@@ -339,6 +339,7 @@ class SubmitFinalQuoteSerializer(serializers.Serializer):
     customer_confirmation = serializers.BooleanField(default=True)
     selected_packages = SelectedPackageSerializer(many=True, required=False)
     additional_notes = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    signature = serializers.CharField(max_length=1000, required=False, allow_blank=True)
     preferred_contact_method = serializers.ChoiceField(
         choices=[('email', 'Email'), ('phone', 'Phone'), ('both', 'Both')],
         default='email'
