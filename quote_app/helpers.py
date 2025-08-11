@@ -1,6 +1,7 @@
 from accounts.models import GHLAuthCredentials
 
 import requests
+from decouple import config
 
 def create_or_update_ghl_contact(submission, is_submit=False):
     try:
@@ -43,7 +44,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         # Common payload fields
         custom_fields = [{
             "id": "vWNjYOQajJAPtx2Hkq2e",
-            "field_value": f"http://localhost:8080/booking?form_id={submission.id}" if not is_submit else f"http://localhost:8080/quote/details/{submission.id}"
+            "field_value": f"{config("BASE_FRONTEND_URI")}/booking?form_id={submission.id}" if not is_submit else f"{config("BASE_FRONTEND_URI")}/quote/details/{submission.id}"
         }]
 
         # Step 3: Update or create
