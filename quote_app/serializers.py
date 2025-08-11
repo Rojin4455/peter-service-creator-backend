@@ -17,7 +17,7 @@ class LocationPublicSerializer(serializers.ModelSerializer):
     """Public serializer for locations"""
     class Meta:
         model = Location
-        fields = ['id', 'name', 'address', 'trip_surcharge']
+        fields = ['id', 'name', 'address', 'trip_surcharge','latitude','longitude']
 
 class ServicePublicSerializer(serializers.ModelSerializer):
     packages_count = serializers.SerializerMethodField()

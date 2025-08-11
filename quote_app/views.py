@@ -227,12 +227,14 @@ class SubmitServiceResponsesView(APIView):
                 service_selection.save()
                 surcharge_for_submission = False
                 # Generate package quotes for ALL packages
-                if self._generate_all_package_quotes(service_selection, submission):
+                surcharge_applied, surcharge_price = self._generate_all_package_quotes(service_selection, submission)
+                if surcharge_applied:
                     surcharge_for_submission = True
 
                 # After all services processed
                 if surcharge_for_submission:
                     submission.quote_surcharge_applicable = True
+                    submission.total_surcharges = surcharge_price
                 
                 # Check if all services have responses
                 all_services_completed = self._check_all_services_completed(submission)
@@ -244,6 +246,7 @@ class SubmitServiceResponsesView(APIView):
                 create_or_update_ghl_contact(submission)
                 
                 print("submissionsssss:", submission.quote_surcharge_applicable)
+                print("submissionsssss:", surcharge_price)
                 print("submissionsssss:", submission.id)
                 
                 return Response({
@@ -534,11 +537,13 @@ class SubmitServiceResponsesView(APIView):
         # Check if location surcharge applies
         surcharge_amount = Decimal('0.00')
         surcharge_applied = False
+        surcharge_amount_applied = Decimal('0.00')
         if submission.location and hasattr(service, 'settings'):
             try:
                 settings = service.settings
                 if settings.apply_trip_charge_to_bid:
                     print("reached hererer")
+                    surcharge_amount_applied = submission.location.trip_surcharge
                     # surcharge_amount = submission.location.trip_surcharge
                     service_selection.surcharge_applicable = True
                     service_selection.surcharge_amount = surcharge_amount
@@ -581,7 +586,7 @@ class SubmitServiceResponsesView(APIView):
                 excluded_features=excluded_features,
                 is_selected=False  # Initially not selected
             )
-        return surcharge_applied
+        return surcharge_applied,surcharge_amount_applied
 
 
     def _calculate_package_specific_adjustments(self, service_selection, package):
@@ -871,27 +876,36 @@ class SubmitFinalQuoteView(APIView):
                 additional_data = {
                     'additional_notes': serializer.validated_data.get('additional_notes', ''),
                     'preferred_contact_method': serializer.validated_data.get('preferred_contact_method', 'email'),
-                    'preferred_start_date': serializer.validated_data.get('preferred_start_date'),
+                    'preferred_start_date': (
+                        serializer.validated_data.get('preferred_start_date').isoformat()
+                        if serializer.validated_data.get('preferred_start_date') else None
+                    ),                    
                     'marketing_consent': serializer.validated_data.get('marketing_consent', False),
                     'signature': serializer.validated_data.get('signature', ""),
                     'submitted_at': timezone.now().isoformat()
                 }
+
+
                 
                 # You might want to store this in a separate field or model
                 # For now, we'll add it to a JSON field if you have one
                 submission.additional_data = additional_data
+                # submission.final_total += submission.total_surcharges
+                print("FFFFFFFFFF:", submission.total_surcharges,submission.final_total)
                 
                 submission.save()
                 
                 # Calculate final totals if not already done
                 if submission.final_total == Decimal('0.00'):
                     self._calculate_final_totals(submission)
+                    
                 
                 # Here you might want to:
                 # 1. Send confirmation email to customer
                 # 2. Notify admin/sales team
                 # 3. Create order record
                 # 4. Generate PDF quote
+                create_or_update_ghl_contact(submission, is_submit=True)
                 
                 return Response({
                     'message': 'Quote submitted successfully',
@@ -955,13 +969,13 @@ class SubmitFinalQuoteView(APIView):
             if selected_quote:
                 total_base_price += selected_quote.base_price + selected_quote.sqft_price
                 total_adjustments += selected_quote.question_adjustments
-                total_surcharges += selected_quote.surcharge_amount
+                # total_surcharges += submission.total_surcharges
         
-        final_total = total_base_price + total_adjustments + total_surcharges
+        final_total = total_base_price + total_adjustments + submission.total_surcharges
         
         submission.total_base_price = total_base_price
         submission.total_adjustments = total_adjustments
-        submission.total_surcharges = total_surcharges
+        # submission.total_surcharges = total_surcharges
         submission.final_total = final_total
         submission.save()
 

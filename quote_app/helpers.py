@@ -2,7 +2,7 @@ from accounts.models import GHLAuthCredentials
 
 import requests
 
-def create_or_update_ghl_contact(submission):
+def create_or_update_ghl_contact(submission, is_submit=False):
     try:
         credentials = GHLAuthCredentials.objects.first()
         token = credentials.access_token
@@ -43,7 +43,7 @@ def create_or_update_ghl_contact(submission):
         # Common payload fields
         custom_fields = [{
             "id": "vWNjYOQajJAPtx2Hkq2e",
-            "field_value": f"http://localhost:8080/booking?form_id={submission.id}"
+            "field_value": f"http://localhost:8080/booking?form_id={submission.id}" if not is_submit else f"http://localhost:8080/quote/details/{submission.id}"
         }]
 
         # Step 3: Update or create
