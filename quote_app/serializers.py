@@ -353,7 +353,7 @@ class SubmitFinalQuoteSerializer(serializers.Serializer):
     customer_confirmation = serializers.BooleanField(default=True)
     selected_packages = SelectedPackageSerializer(many=True, required=False)
     additional_notes = serializers.CharField(max_length=1000, required=False, allow_blank=True)
-    signature = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    signature = serializers.CharField(required=False, allow_blank=True)
     preferred_contact_method = serializers.ChoiceField(
         choices=[('email', 'Email'), ('phone', 'Phone'), ('both', 'Both')],
         default='email'
