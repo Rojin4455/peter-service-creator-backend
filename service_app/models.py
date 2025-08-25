@@ -237,6 +237,12 @@ class QuestionPricing(models.Model):
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
+    VALUE_TYPES = [
+        ('amount', 'Amount'),
+        ('percent', 'Percentage')
+    ]
+
+    
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question = models.ForeignKey(Question, related_name='pricing_rules', on_delete=models.CASCADE)
@@ -244,6 +250,8 @@ class QuestionPricing(models.Model):
     
     # For Yes/No questions - pricing when answer is "Yes"
     yes_pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
+    value_type = models.CharField(max_length=20, choices=VALUE_TYPES, default='amount')
+
     yes_value = models.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -271,12 +279,18 @@ class SubQuestionPricing(models.Model):
         ('fixed_price', 'Fixed Price'),
         ('ignore', 'Ignore'),
     ]
+    VALUE_TYPES = [
+        ('amount', 'Amount'),
+        ('percent', 'Percentage')
+    ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sub_question = models.ForeignKey(SubQuestion, related_name='pricing_rules', on_delete=models.CASCADE)
     package = models.ForeignKey('Package', related_name='sub_question_pricing', on_delete=models.CASCADE)
     
     yes_pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
+    value_type = models.CharField(max_length=20, choices=VALUE_TYPES, default='amount')
+
     yes_value = models.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -305,12 +319,19 @@ class OptionPricing(models.Model):
         ('per_quantity', 'Price Per Quantity'),  # New for quantity questions
         ('ignore', 'Ignore'),
     ]
+
+    VALUE_TYPES = [
+        ('amount', 'Amount'),
+        ('percent', 'Percentage')
+    ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     option = models.ForeignKey(QuestionOption, related_name='pricing_rules', on_delete=models.CASCADE)
     package = models.ForeignKey('Package', related_name='option_pricing', on_delete=models.CASCADE)
     
     pricing_type = models.CharField(max_length=20, choices=PRICING_TYPES, default='ignore')
+    value_type = models.CharField(max_length=20, choices=VALUE_TYPES, default='amount')
+
     value = models.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -433,31 +454,59 @@ class OrderQuestionAnswer(models.Model):
     
 
 
+class PropertyType(models.Model):
+    """Property type model for Residential/Commercial classification"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50, unique=True)  # 'Residential' or 'Commercial'
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'property_types'
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
 
 # models.py
 class GlobalSizePackage(models.Model):
-    """Defines a size range globally applicable to all services"""
+    """Defines a size range globally applicable to all services, separated by property type"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    property_type = models.ForeignKey(
+        PropertyType, 
+        on_delete=models.CASCADE, 
+        related_name='size_packages',null=True, blank=True
+    )
     min_sqft = models.PositiveIntegerField()
     max_sqft = models.PositiveIntegerField(null=True, blank=True, default=100000000)
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+    
 
     class Meta:
-        ordering = ['order', 'min_sqft']
+        db_table = 'global_size_packages'
+        ordering = ['property_type__order', 'order', 'min_sqft']
+        unique_together = ['property_type', 'min_sqft', 'max_sqft']
 
     def __str__(self):
-        return f"{self.min_sqft} – {self.max_sqft} sqft"
+        return f"{self.property_type.name}: {self.min_sqft} - {self.max_sqft} sqft"
     
 
 class GlobalPackageTemplate(models.Model):
     """Defines prices per package type for a global size range"""
+    # id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     global_size = models.ForeignKey(GlobalSizePackage, related_name='template_prices', on_delete=models.CASCADE)
     label = models.CharField(max_length=255)  # Example: Package 1, Package 2
     price = models.DecimalField(max_digits=10, decimal_places=2)
     order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True , null=True, blank=True)
 
     class Meta:
+        db_table = 'global_package_templates'
         ordering = ['order']
         unique_together = ['global_size', 'label']
 
@@ -467,13 +516,33 @@ class GlobalPackageTemplate(models.Model):
 
 class ServicePackageSizeMapping(models.Model):
     """Actual price mapping for service-level packages against size range"""
+    # id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service_package = models.ForeignKey(Package, related_name='size_pricings', on_delete=models.CASCADE)
     global_size = models.ForeignKey(GlobalSizePackage, on_delete=models.CASCADE)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
+        db_table = 'service_package_size_mappings'
         unique_together = ['service_package', 'global_size']
-        ordering = ['global_size__order']
+        ordering = ['global_size__property_type__order', 'global_size__order']
 
     def __str__(self):
-        return f"{self.service_package} ({self.global_size}) - ₹{self.price}"
+        return f"{self.service_package} ({self.global_size}) - ${self.price}"
+    
+
+
+class AddOnService(models.Model):
+    """
+    Represents extra add-ons (upsells, extras, etc.) with base price, name, and description.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    base_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name

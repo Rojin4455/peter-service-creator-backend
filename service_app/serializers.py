@@ -6,7 +6,7 @@ from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
     Order, OrderQuestionAnswer,ServiceSettings, QuestionResponse, SubQuestion, SubQuestionPricing, SubQuestionResponse,
-    OptionResponse
+    OptionResponse,AddOnService
 )
 
 
@@ -563,22 +563,36 @@ class ServiceAnalyticsSerializer(serializers.Serializer):
 
 from .models import GlobalPackageTemplate, GlobalSizePackage, ServicePackageSizeMapping
 
+from rest_framework import serializers
+from .models import (
+    PropertyType, GlobalSizePackage, GlobalPackageTemplate, 
+    ServicePackageSizeMapping, Service, Package
+)
+
+class PropertyTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PropertyType
+        fields = ['id', 'name', 'description', 'is_active', 'order']
+
+
 class GlobalPackageTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = GlobalPackageTemplate
-        fields = ['label', 'price', 'order']
+        fields = ['id', 'label', 'price', 'order']
 
 
 class GlobalSizePackageSerializer(serializers.ModelSerializer):
     template_prices = GlobalPackageTemplateSerializer(many=True)
+    property_type_name = serializers.CharField(source='property_type.name', read_only=True)
 
     class Meta:
         model = GlobalSizePackage
-        fields = ['id', 'min_sqft', 'max_sqft', 'order', 'template_prices']
+        fields = [
+            'id', 'property_type', 'property_type_name', 'min_sqft', 
+            'max_sqft', 'order', 'template_prices'
+        ]
 
     def create(self, validated_data):
-        from .models import Service, ServicePackageSizeMapping
-
         templates = validated_data.pop('template_prices', [])
         global_size = GlobalSizePackage.objects.create(**validated_data)
 
@@ -586,7 +600,7 @@ class GlobalSizePackageSerializer(serializers.ModelSerializer):
         for template in templates:
             GlobalPackageTemplate.objects.create(global_size=global_size, **template)
 
-        # 🧠 Auto-map to all services' packages by order
+        # Auto-map to all services' packages by order
         all_services = Service.objects.prefetch_related('packages').filter(is_active=True)
 
         for service in all_services:
@@ -635,16 +649,29 @@ class GlobalSizePackageSerializer(serializers.ModelSerializer):
             instance.template_prices.all().order_by('order'), many=True
         ).data
         return representation
+
     
 
 
 class ServicePackageSizeMappingSerializer(serializers.ModelSerializer):
     service_package_name = serializers.CharField(source='service_package.name', read_only=True)
     global_size_range = serializers.SerializerMethodField()
+    property_type_name = serializers.CharField(source='global_size.property_type.name', read_only=True)
 
     class Meta:
         model = ServicePackageSizeMapping
-        fields = ['id', 'service_package', 'service_package_name', 'global_size', 'global_size_range', 'price']
+        fields = [
+            'id', 'service_package', 'service_package_name', 'global_size', 
+            'global_size_range', 'property_type_name', 'price'
+        ]
 
     def get_global_size_range(self, obj):
-        return f"{obj.global_size.min_sqft} – {obj.global_size.max_sqft} sqft"
+        return f"{obj.global_size.min_sqft} - {obj.global_size.max_sqft} sqft"
+    
+
+
+
+class AddOnServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AddOnService
+        fields = ["id", "name", "description", "base_price", "created_at", "updated_at"]

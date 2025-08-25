@@ -20,7 +20,7 @@ from rest_framework.permissions import IsAuthenticated
 from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
-    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse
+    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse,AddOnService
 )
 from .serializers import (
     UserSerializer, LoginSerializer, LocationSerializer, ServiceSerializer,
@@ -29,7 +29,7 @@ from .serializers import (
     QuestionOptionSerializer, QuestionPricingSerializer, OptionPricingSerializer,
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
     ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
-    PricingCalculationSerializer, SubQuestionSerializer
+    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer
 )
 
 
@@ -37,8 +37,9 @@ from .serializers import (
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAdminUser, AllowAny
-from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from rest_framework.decorators import api_view
 
 
 class IsAdminPermission(permissions.BasePermission):
@@ -464,6 +465,8 @@ class BulkQuestionPricingView(APIView):
                     for rule in pricing_rules:
                         package_id = rule['package_id']
                         pricing_type = rule['pricing_type']
+                        value_type = rule['value_type']
+
                         value = Decimal(str(rule['value']))
                         
                         # package = get_object_or_404(Package, id=package_id)
@@ -473,7 +476,8 @@ class BulkQuestionPricingView(APIView):
                             package_id=package_id,
                             defaults={
                                 'yes_pricing_type': pricing_type,
-                                'yes_value': value
+                                'yes_value': value,
+                                'value_type':value_type
                             }
                         )
                         
@@ -507,13 +511,15 @@ class BulkSubQuestionPricingView(APIView):
                         package_id = rule['package_id']
                         pricing_type = rule['pricing_type']
                         value = Decimal(str(rule['value']))
+                        value_type = rule['value_type']
                         
                         pricing, created = SubQuestionPricing.objects.get_or_create(
                             sub_question=sub_question,
                             package_id=package_id,
                             defaults={
                                 'yes_pricing_type': pricing_type,
-                                'yes_value': value
+                                'yes_value': value,
+                                "value_type":value_type
                             }
                         )
                         
@@ -550,13 +556,15 @@ class BulkOptionPricingView(APIView):
                     package_id = rule['package_id']
                     pricing_type = rule['pricing_type']
                     value = Decimal(str(rule['value']))
+                    value_type = rule['value_type']
                     
                     pricing, created = OptionPricing.objects.get_or_create(
                         option=option,
                         package_id=package_id,
                         defaults={
                             'pricing_type': pricing_type,
-                            'value': value
+                            'value': value,
+                            "value_type":value_type
                         }
                     )
                     
@@ -915,3 +923,194 @@ class GlobalSizePackageDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = GlobalSizePackageSerializer
     queryset = GlobalSizePackage.objects.all().prefetch_related('template_prices')
     lookup_field = 'id'
+
+
+
+
+
+
+from .serializers import GlobalSizePackageSerializer, ServicePackageSizeMappingSerializer,PropertyTypeSerializer
+from .models import GlobalSizePackage, ServicePackageSizeMapping,PropertyType
+from rest_framework.generics import ListAPIView
+
+
+class PropertyTypeListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /api/property-types/ → List all property types
+    POST /api/property-types/ → Create a new property type
+    """
+    queryset = PropertyType.objects.filter(is_active=True)
+    serializer_class = PropertyTypeSerializer
+
+
+class PropertyTypeDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /api/property-types/{id}/ → Get property type details
+    PUT    /api/property-types/{id}/ → Update property type
+    DELETE /api/property-types/{id}/ → Delete property type
+    """
+    queryset = PropertyType.objects.all()
+    serializer_class = PropertyTypeSerializer
+
+
+class GlobalSizePackageListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /api/global-sizes/ → List all global size packages with templates (grouped by property type)
+    POST /api/global-sizes/ → Create a global size package with template prices
+    """
+    serializer_class = GlobalSizePackageSerializer
+    
+    def get_queryset(self):
+        queryset = GlobalSizePackage.objects.all().prefetch_related(
+            'template_prices', 'property_type'
+        )
+        
+        # Filter by property type if provided
+        property_type_id = self.request.query_params.get('property_type')
+        if property_type_id:
+            queryset = queryset.filter(property_type_id=property_type_id)
+            
+        return queryset
+
+
+class GlobalSizePackageDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /api/global-sizes/{id}/ → Get global size package details
+    PUT    /api/global-sizes/{id}/ → Update global size package
+    DELETE /api/global-sizes/{id}/ → Delete global size package
+    """
+    queryset = GlobalSizePackage.objects.all().prefetch_related('template_prices')
+    serializer_class = GlobalSizePackageSerializer
+
+
+class AutoMapGlobalToServicePackages(APIView):
+    """
+    POST /api/services/{service_id}/auto-map-packages/
+    Automatically map global pricing templates to service-level packages by order.
+    Optionally filter by property type.
+    """
+    def post(self, request, service_id):
+        try:
+            service = Service.objects.prefetch_related('packages').get(id=service_id)
+        except Service.DoesNotExist:
+            return Response({'detail': 'Service not found'}, status=404)
+
+        property_type_id = request.data.get('property_type_id')
+        
+        # Filter global sizes by property type if provided
+        global_sizes_query = GlobalSizePackage.objects.prefetch_related('template_prices').order_by(
+            'property_type__order', 'order'
+        )
+        if property_type_id:
+            global_sizes_query = global_sizes_query.filter(property_type_id=property_type_id)
+        
+        global_sizes = global_sizes_query
+        service_packages = list(service.packages.filter(is_active=True).order_by('order'))
+
+        if not service_packages:
+            return Response({'detail': 'No service-level packages found.'}, status=400)
+
+        created_mappings = []
+        for global_size in global_sizes:
+            templates = list(global_size.template_prices.order_by('order'))
+            for idx, template in enumerate(templates):
+                if idx < len(service_packages):
+                    service_package = service_packages[idx]
+                    mapping, created = ServicePackageSizeMapping.objects.get_or_create(
+                        service_package=service_package,
+                        global_size=global_size,
+                        defaults={'price': template.price}
+                    )
+                    if created:
+                        created_mappings.append(mapping)
+
+        return Response(ServicePackageSizeMappingSerializer(created_mappings, many=True).data, status=201)
+
+
+class ServiceMappedSizesAPIView(ListAPIView):
+    """
+    GET /api/services/{service_id}/mapped-sizes/ → Retrieve all size mappings for a service
+    Query params: property_type - filter by property type
+    """
+    serializer_class = ServicePackageSizeMappingSerializer
+
+    def get_queryset(self):
+        service_id = self.kwargs['service_id']
+        queryset = ServicePackageSizeMapping.objects.filter(
+            service_package__service_id=service_id
+        ).select_related('global_size__property_type', 'service_package')
+        
+        # Filter by property type if provided
+        property_type_id = self.request.query_params.get('property_type')
+        if property_type_id:
+            queryset = queryset.filter(global_size__property_type_id=property_type_id)
+            
+        return queryset
+
+
+class GlobalSizesByPropertyTypeView(APIView):
+    """
+    GET /api/global-sizes-by-property-type/ → Get sizes grouped by property type
+    """
+    def get(self, request):
+        property_types = PropertyType.objects.filter(is_active=True).prefetch_related(
+            Prefetch(
+                'size_packages',
+                queryset=GlobalSizePackage.objects.prefetch_related('template_prices').order_by('order')
+            )
+        )
+        
+        result = []
+        for prop_type in property_types:
+            sizes_data = GlobalSizePackageSerializer(prop_type.size_packages.all(), many=True).data
+            result.append({
+                'property_type': PropertyTypeSerializer(prop_type).data,
+                'size_packages': sizes_data
+            })
+        
+        return Response(result)
+    
+
+
+@api_view(["GET", "POST"])
+def addon_list_create(request):
+    """
+    GET: List all AddOns
+    POST: Create a new AddOn
+    """
+    if request.method == "GET":
+        addons = AddOnService.objects.all().order_by("-created_at")
+        serializer = AddOnServiceSerializer(addons, many=True)
+        return Response(serializer.data)
+
+    elif request.method == "POST":
+        serializer = AddOnServiceSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET", "PUT", "PATCH", "DELETE"])
+def addon_detail(request, pk):
+    """
+    GET: Retrieve AddOn
+    PUT/PATCH: Update AddOn
+    DELETE: Delete AddOn
+    """
+    addon = get_object_or_404(AddOnService, pk=pk)
+
+    if request.method == "GET":
+        serializer = AddOnServiceSerializer(addon)
+        return Response(serializer.data)
+
+    elif request.method in ["PUT", "PATCH"]:
+        serializer = AddOnServiceSerializer(addon, data=request.data, partial=(request.method == "PATCH"))
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == "DELETE":
+        addon.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

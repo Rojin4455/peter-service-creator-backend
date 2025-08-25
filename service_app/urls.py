@@ -99,8 +99,25 @@ urlpatterns = [
     # path('questions/validate-structure/', views.QuestionStructureValidatorView.as_view(), name='validate-question-structure'),
 
 
-    path('global-sizes/', views.GlobalSizePackageListCreateView.as_view(), name='global-size-create'),
+    # path('global-sizes/', views.GlobalSizePackageListCreateView.as_view(), name='global-size-create'),
+    # path('services/<uuid:service_id>/auto-map-packages/', views.AutoMapGlobalToServicePackages.as_view(), name='auto-map-packages'),
+    # path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesAPIView.as_view(), name='mapped-sizes'),
+    # path('global-sizes/<str:id>/', views.GlobalSizePackageDetailView.as_view(), name='global-size-detail'),
+
+
+    path('property-types/', views.PropertyTypeListCreateView.as_view(), name='property-type-list-create'),
+    path('property-types/<uuid:pk>/', views.PropertyTypeDetailView.as_view(), name='property-type-detail'),
+    
+    # Global Size Packages (updated)
+    path('global-sizes/', views.GlobalSizePackageListCreateView.as_view(), name='global-size-list-create'),
+    path('global-sizes/<uuid:pk>/', views.GlobalSizePackageDetailView.as_view(), name='global-size-detail'),
+    path('global-sizes-by-property-type/', views.GlobalSizesByPropertyTypeView.as_view(), name='global-sizes-by-property-type'),
+    
+    # Service Package Mappings (updated)
     path('services/<uuid:service_id>/auto-map-packages/', views.AutoMapGlobalToServicePackages.as_view(), name='auto-map-packages'),
-    path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesAPIView.as_view(), name='mapped-sizes'),
-    path('global-sizes/<str:id>/', views.GlobalSizePackageDetailView.as_view(), name='global-size-detail'),
+    path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesAPIView.as_view(), name='service-mapped-sizes'),
+
+
+    path("addons/", views.addon_list_create, name="addon-list-create"),
+    path("addons/<uuid:pk>/", views.addon_detail, name="addon-detail"),
 ]
