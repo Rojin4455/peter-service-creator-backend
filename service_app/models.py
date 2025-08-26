@@ -136,6 +136,8 @@ class PackageFeature(models.Model):
         return f"{self.package.name} - {self.feature.name}"
 
 
+
+
 class Question(models.Model):
     """Base question model for dynamic question builder"""
     
@@ -184,6 +186,9 @@ class Question(models.Model):
         return self.child_questions.exists()
 
 
+
+    
+
 class QuestionOption(models.Model):
     """Options for describe/quantity type questions"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -193,7 +198,7 @@ class QuestionOption(models.Model):
     is_active = models.BooleanField(default=True)
     
     # For quantity questions
-    allow_quantity = models.BooleanField(default=False, 
+    allow_quantity = models.BooleanField(default=False,
                                        help_text="Allow quantity input for this option")
     max_quantity = models.PositiveIntegerField(default=1, 
                                              help_text="Maximum allowed quantity")
@@ -207,6 +212,53 @@ class QuestionOption(models.Model):
     def __str__(self):
         return f"{self.question.question_text[:30]}... - {self.option_text}"
     
+
+class QuantityDiscount(models.Model):
+    """Volume discount rules for quantity type questions"""
+
+    DISCOUNT_TYPE_CHOICES = [
+        ('percent', 'Percentage'),
+        ('amount', 'Fixed Amount'),
+    ]
+
+    APPLY_SCOPE_CHOICES = [
+        ('question', 'Apply to whole question'),
+        ('option', 'Apply only to specific option'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question = models.ForeignKey(
+        Question, related_name='quantity_discounts', on_delete=models.CASCADE
+    )
+    option = models.ForeignKey(
+        QuestionOption, related_name='quantity_discounts',
+        on_delete=models.CASCADE, null=True, blank=True,
+        help_text="Leave empty if discount is for entire question"
+    )
+
+    scope = models.CharField(
+        max_length=20, choices=APPLY_SCOPE_CHOICES, default='question'
+    )
+    discount_type = models.CharField(
+        max_length=10, choices=DISCOUNT_TYPE_CHOICES, default='percent'
+    )
+    value = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Discount value (percentage or fixed amount)"
+    )
+    min_quantity = models.PositiveIntegerField(
+        help_text="Minimum quantity required for this discount"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'quantity_discounts'
+        ordering = ['min_quantity']
+
+    def __str__(self):
+        scope_text = "option" if self.option else "question"
+        return f"{self.question.question_text[:30]}... {scope_text} - {self.value}{self.discount_type} off for {self.min_quantity}+"
 
 
 class SubQuestion(models.Model):

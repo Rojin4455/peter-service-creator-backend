@@ -1,5 +1,5 @@
 # views.py
-from rest_framework import generics, status, permissions
+from rest_framework import generics, status, permissions,viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -10,6 +10,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
 import requests
+from rest_framework.decorators import action
 import os
 from django.db import models
 from .models import Service, ServiceSettings
@@ -20,7 +21,7 @@ from rest_framework.permissions import IsAuthenticated
 from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
-    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse,AddOnService
+    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse,AddOnService,QuantityDiscount
 )
 from .serializers import (
     UserSerializer, LoginSerializer, LocationSerializer, ServiceSerializer,
@@ -29,7 +30,7 @@ from .serializers import (
     QuestionOptionSerializer, QuestionPricingSerializer, OptionPricingSerializer,
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
     ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
-    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer
+    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer
 )
 
 
@@ -40,6 +41,7 @@ from rest_framework.permissions import IsAdminUser, AllowAny
 from rest_framework.views import APIView
 
 from rest_framework.decorators import api_view
+
 
 
 class IsAdminPermission(permissions.BasePermission):
@@ -277,6 +279,8 @@ class QuestionListCreateView(generics.ListCreateAPIView):
         service_id = self.request.query_params.get('service', None)
         question_type = self.request.query_params.get('type', None)
         parent_only = self.request.query_params.get('parent_only', 'false').lower() == 'true'
+
+        
         
         if service_id:
             queryset = queryset.filter(service_id=service_id)
@@ -1114,3 +1118,20 @@ def addon_detail(request, pk):
     elif request.method == "DELETE":
         addon.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+        
+
+class QuantityDiscountViewSet(viewsets.ModelViewSet):
+    """Admin CRUD for quantity-based discounts"""
+    queryset = QuantityDiscount.objects.all()
+    serializer_class = QuantityDiscountSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        question_id = self.request.query_params.get('question')
+        option_id = self.request.query_params.get('option')
+        if question_id:
+            queryset = queryset.filter(question_id=question_id)
+        if option_id:
+            queryset = queryset.filter(option_id=option_id)
+        return queryset

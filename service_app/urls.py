@@ -3,6 +3,9 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
+router = DefaultRouter()
+router.register(r'quantity-discounts', views.QuantityDiscountViewSet, basename='quantity-discount')
+
 # Complete Admin API URLs
 urlpatterns = [
     # ============================================================================
@@ -120,4 +123,5 @@ urlpatterns = [
 
     path("addons/", views.addon_list_create, name="addon-list-create"),
     path("addons/<uuid:pk>/", views.addon_detail, name="addon-detail"),
-]
+
+]+ router.urls

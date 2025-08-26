@@ -6,7 +6,7 @@ from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
     Order, OrderQuestionAnswer,ServiceSettings, QuestionResponse, SubQuestion, SubQuestionPricing, SubQuestionResponse,
-    OptionResponse,AddOnService
+    OptionResponse,AddOnService,QuantityDiscount
 )
 
 
@@ -675,3 +675,12 @@ class AddOnServiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = AddOnService
         fields = ["id", "name", "description", "base_price", "created_at", "updated_at"]
+
+
+class QuantityDiscountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuantityDiscount
+        fields = [
+            'id', 'question', 'option', 'scope',
+            'discount_type', 'value', 'min_quantity', 'created_at'
+        ]
