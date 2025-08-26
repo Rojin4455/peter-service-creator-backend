@@ -28,6 +28,8 @@ from .serializers import (
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
 
+from service_app.serializers import GlobalSizePackageSerializer
+
 from quote_app.helpers import create_or_update_ghl_contact
 
 # Step 1: Get initial data (locations, services, size ranges)
@@ -36,14 +38,19 @@ class InitialDataView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
+        property_type = request.query_params.get('property_type')  # ?property_type=<uuid>
+
         locations = Location.objects.filter(is_active=True).order_by('name')
         services = Service.objects.filter(is_active=True).order_by('order', 'name')
+
         size_ranges = GlobalSizePackage.objects.all().order_by('order', 'min_sqft')
-        
+        if property_type:
+            size_ranges = size_ranges.filter(property_type__name=property_type)
+
         return Response({
             'locations': LocationPublicSerializer(locations, many=True).data,
             'services': ServicePublicSerializer(services, many=True).data,
-            'size_ranges': GlobalSizePackagePublicSerializer(size_ranges, many=True).data
+            'size_ranges': GlobalSizePackagePublicSerializer(size_ranges, many=True).data,
         })
 
 # Step 2: Create customer submission

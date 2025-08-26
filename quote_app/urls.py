@@ -6,10 +6,8 @@ urlpatterns = [
     # ============================================================================
     # QUOTE GENERATOR FLOW
     # ============================================================================
-    
     # Step 1: Get initial data (locations, services, size ranges)
     path('initial-data/', views.InitialDataView.as_view(), name='initial-data'),
-    
     # Step 2: Create customer submission
     path('create-submission/', views.CustomerSubmissionCreateView.as_view(), name='create-submission'),
     
@@ -37,7 +35,6 @@ urlpatterns = [
     
     # Check submission status
     path('<uuid:submission_id>/status/', views.SubmissionStatusView.as_view(), name='submission-status'),
-    
     # Get service packages
     path('services/<uuid:service_id>/packages/', views.ServicePackagesView.as_view(), name='service-packages'),
 ]

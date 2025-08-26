@@ -25,7 +25,7 @@ class Location(models.Model):
     longitude = models.DecimalField(max_digits=21, decimal_places=16)
     trip_surcharge = models.DecimalField(
         max_digits=10, 
-        decimal_places=2, 
+        decimal_places=2,
         default=Decimal('0.00'),
         validators=[MinValueValidator(Decimal('0.00'))]
     )
