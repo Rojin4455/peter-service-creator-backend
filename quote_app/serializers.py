@@ -85,25 +85,23 @@ class GlobalSizePackagePublicSerializer(serializers.ModelSerializer):
 # Customer submission serializers
 class CustomerSubmissionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating customer submissions"""
+
     class Meta:
         model = CustomerSubmission
         fields = [
-            'customer_name', 'customer_email', 'customer_phone',
-            'customer_address', 'house_sqft', 'location'
+            "first_name", "last_name", "company_name",
+            "customer_email", "customer_phone", "postal_code",
+            "allow_sms", "allow_email",
+            "street_address", "location",
+            "heard_about_us",
+            "property_type", "property_name", "num_floors", "is_previous_customer",
+            "size_range", "actual_sqft",
         ]
-        read_only_fields = ['customer_address']
-    
+
     def create(self, validated_data):
-        # Set expiration date (e.g., 30 days from now)
         from django.utils import timezone
         from datetime import timedelta
-        location_obj = validated_data['location']
-        # If it's an ID instead of a Location object
-        if isinstance(location_obj, (str, int)):
-            location_obj = Location.objects.get(id=location_obj)
 
-        validated_data['customer_address'] = location_obj.address
-        
         submission = CustomerSubmission.objects.create(**validated_data)
         submission.expires_at = timezone.now() + timedelta(days=30)
         submission.save()
@@ -195,18 +193,45 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
-    print("erererereererrerere")
-    
+
     class Meta:
         model = CustomerSubmission
         fields = [
-            'id', 'customer_name', 'customer_email', 'customer_phone',
-            'customer_address', 'house_sqft', 'location', 'location_details',
-            'status', 'total_base_price', 'total_adjustments',
-            'total_surcharges', 'final_total', 'created_at','quote_surcharge_applicable',
-            'expires_at', 'service_selections','additional_data'
+            'id',
+            # Customer info
+            'first_name', 'last_name', 'company_name',
+            'customer_email', 'customer_phone', 'postal_code',
+            'allow_sms', 'allow_email',
+
+            # Address info
+            'street_address', 'location', 'location_details',
+
+            # Discovery
+            'heard_about_us',
+
+            # Property info
+            'property_type', 'property_name', 'num_floors', 'is_previous_customer',
+
+            # Size info
+            'size_range', 'actual_sqft',
+
+            # Submission details
+            'status', 'selected_services',
+
+            # Pricing
+            'total_base_price', 'total_adjustments', 'total_surcharges',
+            'final_total', 'quote_surcharge_applicable',
+
+            # Extra
+            'additional_data',
+
+            # Timestamps
+            'created_at', 'updated_at', 'expires_at',
+
+            # Relations
+            'service_selections',
         ]
-    
+
     def get_service_selections(self, obj):
         selections = obj.customerserviceselection_set.all().prefetch_related(
             'package_quotes__package',
@@ -214,13 +239,15 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'question_responses__sub_question_responses'
         )
         return CustomerServiceSelectionDetailSerializer(selections, many=True).data
-    
+
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get('request')
         if request and request.method in ['PATCH', 'PUT']:
             fields['customer_address'].read_only = True
         return fields
+    
+
 
 class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for service selections"""
@@ -228,16 +255,17 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
     selected_package_details = PackagePublicSerializer(source='selected_package', read_only=True)
     package_quotes = serializers.SerializerMethodField()
     question_responses = CustomerQuestionResponseSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = CustomerServiceSelection
         fields = [
-            'id', 'service', 'service_details', 'selected_package', 'selected_package_details',
+            'id', 'service', 'service_details',
+            'selected_package', 'selected_package_details',
             'question_adjustments', 'surcharge_applicable', 'surcharge_amount',
             'final_base_price', 'final_sqft_price', 'final_total_price',
             'package_quotes', 'question_responses'
         ]
-    
+
     def get_package_quotes(self, obj):
         # Only return selected quote if packages are selected, otherwise all quotes
         if obj.selected_package:
@@ -245,7 +273,7 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         else:
             quotes = obj.package_quotes.all().order_by('package__order')
         return CustomerPackageQuoteSerializer(quotes, many=True).data
-    
+
     
 
 # Utility serializers

@@ -59,15 +59,14 @@ class CustomerSubmissionCreateView(generics.CreateAPIView):
     queryset = CustomerSubmission.objects.all()
     serializer_class = CustomerSubmissionCreateSerializer
     permission_classes = [AllowAny]
-    
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         submission = serializer.save()
-        
         return Response({
-            'submission_id': submission.id,
-            'message': 'Customer information saved successfully'
+            "submission_id": str(submission.id),
+            "message": "Customer information saved successfully"
         }, status=status.HTTP_201_CREATED)
 
 # Step 3: Add services to submission

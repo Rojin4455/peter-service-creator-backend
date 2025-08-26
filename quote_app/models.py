@@ -2,10 +2,10 @@
 from django.db import models
 from decimal import Decimal
 import uuid
-from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion
+from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage
 
 class CustomerSubmission(models.Model):
-    """Main customer submission model"""
+    """Main customer submission model (revamped)"""
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('responses_completed', 'Responses Completed'),
@@ -13,43 +13,67 @@ class CustomerSubmission(models.Model):
         ('submitted', 'Submitted'),
         ('expired', 'Expired'),
     ]
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Customer Information
-    customer_name = models.CharField(max_length=255)
+    first_name = models.CharField(max_length=100, null=True, blank=True)
+    last_name = models.CharField(max_length=100, null=True, blank=True)
+    company_name = models.CharField(max_length=255, null=True, blank=True)
     customer_email = models.EmailField()
     customer_phone = models.CharField(max_length=20)
-    ghl_contact_id = models.CharField(null=True, blank=True, max_length=255)
-    customer_address = models.TextField()
-    
-    # House Information
-    house_sqft = models.PositiveIntegerField()
+    postal_code = models.CharField(max_length=20, null=True, blank=True)
+
+    allow_sms = models.BooleanField(default=False)
+    allow_email = models.BooleanField(default=True)
+
+    # Address info
+    street_address = models.TextField(null=True, blank=True)
     location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True, blank=True)
-    
-    # Submission Details
-    selected_services = models.ManyToManyField(Service, through='CustomerServiceSelection')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    
-    # Pricing Summary (calculated after package selection)
-    total_base_price = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    total_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    total_surcharges = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+
+    # Discovery
+    heard_about_us = models.CharField(max_length=255, null=True, blank=True)
+
+    # Property info
+    PROPERTY_TYPE_CHOICES = [
+        ("residential", "Residential"),
+        ("commercial", "Commercial"),
+    ]
+    property_type = models.CharField(max_length=20, choices=PROPERTY_TYPE_CHOICES, null=True, blank=True)
+    property_name = models.CharField(max_length=255, null=True, blank=True)  # only for commercial
+
+    num_floors = models.CharField(max_length=50, null=True, blank=True)  # e.g., "1 story", "2 story"
+    is_previous_customer = models.BooleanField(default=False)
+
+    # Size info
+    size_range = models.ForeignKey(GlobalSizePackage, on_delete=models.SET_NULL, null=True, blank=True)
+    actual_sqft = models.PositiveIntegerField(null=True, blank=True)
+
+    # Submission details
+    selected_services = models.ManyToManyField(Service, through="CustomerServiceSelection")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+
+    # Pricing
+    total_base_price = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_surcharges = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     quote_surcharge_applicable = models.BooleanField(default=False)
-    final_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    additional_data = models.JSONField(default=dict, null=True,blank=True)
-    
+    final_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    additional_data = models.JSONField(default=dict, null=True, blank=True)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField(null=True, blank=True)
-    
+
     class Meta:
-        db_table = 'customer_submissions'
-        ordering = ['-created_at']
-    
+        db_table = "customer_submissions"
+        ordering = ["-created_at"]
+
     def __str__(self):
-        return f"{self.customer_name} - {self.customer_email}"
+        return f"{self.first_name} {self.last_name} - {self.customer_email}"
+
 
 class CustomerServiceSelection(models.Model):
     """Through model for customer service selections"""
