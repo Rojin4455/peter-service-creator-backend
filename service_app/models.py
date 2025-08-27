@@ -529,8 +529,8 @@ class GlobalSizePackage(models.Model):
     """Defines a size range globally applicable to all services, separated by property type"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     property_type = models.ForeignKey(
-        PropertyType, 
-        on_delete=models.CASCADE, 
+        PropertyType,
+        on_delete=models.CASCADE,
         related_name='size_packages',null=True, blank=True
     )
     min_sqft = models.PositiveIntegerField()

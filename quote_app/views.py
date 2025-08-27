@@ -571,7 +571,7 @@ class SubmitServiceResponsesView(APIView):
                 service_selection, package, sqft_price
             )
             
-            total_price = base_price + sqft_price + question_adjustments + surcharge_amount_applied
+            total_price = base_price + sqft_price + question_adjustments
             
             # Get package features
             package_features = PackageFeature.objects.filter(package=package).select_related('feature')
@@ -584,7 +584,7 @@ class SubmitServiceResponsesView(APIView):
                 base_price=base_price,
                 sqft_price=sqft_price,
                 question_adjustments=question_adjustments,
-                surcharge_amount=surcharge_amount_applied,
+                surcharge_amount=Decimal('0.00'),
                 total_price=total_price,
                 included_features=included_features,
                 excluded_features=excluded_features,
