@@ -381,11 +381,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Service
-        fields = [
-            'id', 'name', 'description', 'is_active', 'order',
-            'created_at', 'updated_at', 'created_by_name',
-            'questions_count'  # 'packages_count', 'features_count', 
-        ]
+        fields = "__all__" 
 
 
 # Nested serializers for complex operations
