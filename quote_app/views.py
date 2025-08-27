@@ -16,6 +16,7 @@ from service_app.models import (
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
     ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService
 )
+from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
@@ -1136,8 +1137,16 @@ class AddAddOnsToSubmissionView(APIView):
             # Attach addons (many-to-many add)
             submission.addons.add(*addons)
 
+            # ✅ Recalculate total_addons_price
+            total_price = submission.addons.aggregate(
+                total=Sum("base_price")
+            )["total"] or Decimal("0.00")
+            submission.total_addons_price = total_price
+            submission.save()
+
             return Response({
                 "message": "Add-ons added successfully",
+                "total_addons_price": str(submission.total_addons_price),
                 "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
             })
         except Exception as e:
@@ -1158,8 +1167,16 @@ class AddAddOnsToSubmissionView(APIView):
             # Remove addons (many-to-many remove)
             submission.addons.remove(*addons)
 
+            # ✅ Recalculate total_addons_price
+            total_price = submission.addons.aggregate(
+                total=Sum("base_price")
+            )["total"] or Decimal("0.00")
+            submission.total_addons_price = total_price
+            submission.save()
+
             return Response({
                 "message": "Add-ons removed successfully",
+                "total_addons_price": str(submission.total_addons_price),
                 "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
             })
         except Exception as e:

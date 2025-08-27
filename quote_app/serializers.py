@@ -231,7 +231,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'final_total', 'quote_surcharge_applicable',
 
             # Extra
-            'additional_data','addons',
+            'additional_data','total_addons_price','addons',
 
             # Timestamps
             'created_at', 'updated_at', 'expires_at',
