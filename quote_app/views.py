@@ -14,7 +14,7 @@ from service_app.models import ServiceSettings
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location,
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
@@ -23,7 +23,7 @@ from .models import (
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,
-    CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,
+    CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
@@ -1082,3 +1082,59 @@ class ServicePackagesView(APIView):
             'service': ServicePublicSerializer(service).data,
             'packages': PackagePublicSerializer(packages, many=True).data
         })
+
+
+
+
+class AddOnServiceListView(generics.ListAPIView):
+    queryset = AddOnService.objects.all()
+    serializer_class = AddOnServiceSerializer
+    permission_classes = [AllowAny]
+
+
+class AddAddOnsToSubmissionView(APIView):
+    permission_classes = [AllowAny]  # ✅ no auth
+
+    def post(self, request, submission_id):
+        addon_ids = request.data.get("addon_ids", [])
+        if not addon_ids:
+            return Response({"error": "addon_ids list is required"}, status=400)
+
+        try:
+            submission = get_object_or_404(CustomerSubmission, id=submission_id)
+            addons = AddOnService.objects.filter(id__in=addon_ids)
+            
+            if not addons.exists():
+                return Response({"error": "No valid add-ons found"}, status=400)
+
+            # Attach addons (many-to-many add)
+            submission.addons.add(*addons)
+
+            return Response({
+                "message": "Add-ons added successfully",
+                "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
+            })
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
+        
+    def delete(self, request, submission_id):
+        addon_ids = request.data.get("addon_ids", [])
+        if not addon_ids:
+            return Response({"error": "addon_ids list is required"}, status=400)
+
+        try:
+            submission = get_object_or_404(CustomerSubmission, id=submission_id)
+            addons = AddOnService.objects.filter(id__in=addon_ids)
+
+            if not addons.exists():
+                return Response({"error": "No valid add-ons found"}, status=400)
+
+            # Remove addons (many-to-many remove)
+            submission.addons.remove(*addons)
+
+            return Response({
+                "message": "Add-ons removed successfully",
+                "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
+            })
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)

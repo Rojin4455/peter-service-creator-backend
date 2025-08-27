@@ -2,7 +2,7 @@
 from django.db import models
 from decimal import Decimal
 import uuid
-from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage
+from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService
 
 class CustomerSubmission(models.Model):
     """Main customer submission model (revamped)"""
@@ -61,6 +61,10 @@ class CustomerSubmission(models.Model):
     final_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 
     additional_data = models.JSONField(default=dict, null=True, blank=True)
+
+    addons = models.ManyToManyField(AddOnService, blank=True, related_name="submissions")
+
+    
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

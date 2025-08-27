@@ -4,7 +4,7 @@ from decimal import Decimal
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location, 
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing, AddOnService
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
@@ -188,6 +188,11 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
         features = Feature.objects.filter(id__in=obj.excluded_features)
         return FeaturePublicSerializer(features, many=True).data
 
+class AddOnServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AddOnService
+        fields = ["id", "name", "description", "base_price"]
+
 
 from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
@@ -195,6 +200,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
+    addons = AddOnServiceSerializer(many=True, read_only=True) 
 
     class Meta:
         model = CustomerSubmission
@@ -225,7 +231,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'final_total', 'quote_surcharge_applicable',
 
             # Extra
-            'additional_data',
+            'additional_data','addons',
 
             # Timestamps
             'created_at', 'updated_at', 'expires_at',

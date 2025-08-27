@@ -37,4 +37,7 @@ urlpatterns = [
     path('<uuid:submission_id>/status/', views.SubmissionStatusView.as_view(), name='submission-status'),
     # Get service packages
     path('services/<uuid:service_id>/packages/', views.ServicePackagesView.as_view(), name='service-packages'),
+
+    path("addons/", views.AddOnServiceListView.as_view(), name="addon-list"),
+    path("submissions/<uuid:submission_id>/addons/", views.AddAddOnsToSubmissionView.as_view(), name="submission-addons"),
 ]
