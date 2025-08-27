@@ -230,7 +230,7 @@ class SubQuestionPricingSerializer(serializers.ModelSerializer):
         model = SubQuestionPricing
         fields = [
             'id', 'sub_question', 'sub_question_text', 'package', 'package_name',
-            'yes_pricing_type', 'yes_value', 'created_at', 'updated_at'
+            'yes_pricing_type', 'yes_value', 'created_at', 'updated_at','value_type'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -265,7 +265,7 @@ class OptionPricingSerializer(serializers.ModelSerializer):
         model = OptionPricing
         fields = [
             'id', 'option', 'option_text', 'package', 'package_name',
-            'pricing_type', 'value', 'created_at', 'updated_at'
+            'pricing_type', 'value', 'created_at', 'updated_at','value_type'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -280,7 +280,7 @@ class QuestionPricingSerializer(serializers.ModelSerializer):
         model = QuestionPricing
         fields = [
             'id', 'question', 'question_text', 'package', 'package_name',
-            'yes_pricing_type', 'yes_value', 'created_at', 'updated_at'
+            'yes_pricing_type', 'yes_value', 'created_at', 'updated_at','value_type'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 

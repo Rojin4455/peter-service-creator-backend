@@ -470,10 +470,7 @@ class BulkQuestionPricingView(APIView):
                         package_id = rule['package_id']
                         pricing_type = rule['pricing_type']
                         value_type = rule['value_type']
-
                         value = Decimal(str(rule['value']))
-                        
-                        # package = get_object_or_404(Package, id=package_id)
                         
                         pricing, created = QuestionPricing.objects.get_or_create(
                             question=question,
@@ -481,13 +478,14 @@ class BulkQuestionPricingView(APIView):
                             defaults={
                                 'yes_pricing_type': pricing_type,
                                 'yes_value': value,
-                                'value_type':value_type
+                                'value_type': value_type
                             }
                         )
                         
                         if not created:
                             pricing.yes_pricing_type = pricing_type
                             pricing.yes_value = value
+                            pricing.value_type = value_type  # ✅ added
                             pricing.save()
 
                 return Response({'message': 'Question pricing rules updated successfully'})
@@ -523,13 +521,14 @@ class BulkSubQuestionPricingView(APIView):
                             defaults={
                                 'yes_pricing_type': pricing_type,
                                 'yes_value': value,
-                                "value_type":value_type
+                                'value_type': value_type
                             }
                         )
                         
                         if not created:
                             pricing.yes_pricing_type = pricing_type
                             pricing.yes_value = value
+                            pricing.value_type = value_type   # ✅ added update for value_type
                             pricing.save()
 
                 return Response({'message': 'Sub-question pricing rules updated successfully'})
@@ -549,8 +548,10 @@ class BulkOptionPricingView(APIView):
         pricing_rules = request.data.get('pricing_rules', [])
 
         if not option_id or not pricing_rules:
-            return Response({'error': 'option_id and pricing_rules are required'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'option_id and pricing_rules are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             with transaction.atomic():
@@ -568,13 +569,14 @@ class BulkOptionPricingView(APIView):
                         defaults={
                             'pricing_type': pricing_type,
                             'value': value,
-                            "value_type":value_type
+                            'value_type': value_type
                         }
                     )
                     
                     if not created:
                         pricing.pricing_type = pricing_type
                         pricing.value = value
+                        pricing.value_type = value_type  # ✅ added
                         pricing.save()
 
             return Response({'message': 'Option pricing rules updated successfully'})
