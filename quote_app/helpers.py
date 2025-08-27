@@ -52,7 +52,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
             ghl_contact_id = results[0]["id"]
             contact_payload = {
                 "firstName": submission.customer_name,
-                "address1": submission.customer_address,
+                "address1": submission.street_address,
                 "customFields": custom_fields
             }
             contact_response = requests.put(
@@ -62,10 +62,10 @@ def create_or_update_ghl_contact(submission, is_submit=False):
             )
         else:
             contact_payload = {
-                "firstName": submission.customer_name,
+                "firstName": submission.first_name,
                 "email": submission.customer_email,
                 "phone": submission.customer_phone,
-                "address1": submission.customer_address,
+                "address1": submission.street_address,
                 "locationId": location_id,
                 "customFields": custom_fields
             }

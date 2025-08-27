@@ -23,6 +23,8 @@ class CustomerSubmission(models.Model):
     customer_email = models.EmailField()
     customer_phone = models.CharField(max_length=20)
     postal_code = models.CharField(max_length=20, null=True, blank=True)
+    ghl_contact_id = models.CharField(max_length=100, null=True, blank=True)
+
 
     allow_sms = models.BooleanField(default=False)
     allow_email = models.BooleanField(default=True)
