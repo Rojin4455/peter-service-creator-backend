@@ -216,6 +216,9 @@ class SubmitServiceResponsesView(APIView):
                         text_answer=response_data.get('text_answer', '')
                     )
                     
+                    # Process response data and store related objects
+                    self._process_question_response_data(question, response_data, question_response)
+                    
                     # Calculate pricing adjustment (for averaging only)
                     question_adjustment = self._calculate_question_adjustment_for_averaging(
                         question, response_data, question_response, service_selection
@@ -259,29 +262,77 @@ class SubmitServiceResponsesView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
+    def _process_question_response_data(self, question, response_data, question_response):
+        """Process and store response data for different question types"""
+        if question.question_type in ['describe', 'quantity']:
+            selected_options = response_data.get('selected_options', [])
+            
+            # Use set to prevent duplicates
+            processed_options = set()
+            
+            for option_data in selected_options:
+                option_id = option_data['option_id']
+                quantity = option_data.get('quantity', 1)
+                
+                # Create unique key to prevent duplicates
+                option_key = f"{option_id}_{quantity}"
+                if option_key in processed_options:
+                    continue
+                processed_options.add(option_key)
+                
+                option = get_object_or_404(QuestionOption, id=option_id)
+                
+                CustomerOptionResponse.objects.create(
+                    question_response=question_response,
+                    option=option,
+                    quantity=quantity
+                )
+        
+        elif question.question_type == 'multiple_yes_no':
+            sub_question_answers = response_data.get('sub_question_answers', [])
+            
+            # Use set to prevent duplicates
+            processed_sub_questions = set()
+            
+            for sub_answer in sub_question_answers:
+                if sub_answer.get('answer') is True:
+                    sub_question_id = sub_answer['sub_question_id']
+                    
+                    if sub_question_id in processed_sub_questions:
+                        continue
+                    processed_sub_questions.add(sub_question_id)
+                    
+                    sub_question = get_object_or_404(SubQuestion, id=sub_question_id)
+                    
+                    CustomerSubQuestionResponse.objects.create(
+                        question_response=question_response,
+                        sub_question=sub_question,
+                        answer=True
+                    )
+    
     def _calculate_question_adjustment_for_averaging(self, question, response_data, question_response, service_selection):
         """Calculate average adjustment across packages (for display only)"""
         packages = Package.objects.filter(service=question.service, is_active=True)
         if not packages.exists():
             return Decimal('0.00')
-            
-        # Get base sqft price for percentage calculations
-        base_sqft_price = self._get_base_sqft_price(service_selection.submission, packages.first())
         
         total_adjustment = Decimal('0.00')
         package_count = 0
         
         for package in packages:
+            # Get package-specific sqft price
+            package_sqft_price = self._get_package_sqft_price(service_selection.submission, package)
+            
             package_adjustment = self._calculate_single_package_adjustment(
-                question, response_data, question_response, package, base_sqft_price
+                question, response_data, question_response, package, package_sqft_price
             )
             total_adjustment += package_adjustment
             package_count += 1
         
         return total_adjustment / package_count if package_count > 0 else Decimal('0.00')
     
-    def _get_base_sqft_price(self, submission, package):
-        """Get the base square footage price for percentage calculations"""
+    def _get_package_sqft_price(self, submission, package):
+        """Get the package-specific square footage price"""
         if not submission.size_range:
             return Decimal('0.00')
             
@@ -289,6 +340,8 @@ class SubmitServiceResponsesView(APIView):
             service_package=package,
             global_size=submission.size_range
         ).first()
+
+        print("sqft_mapping.price: ", sqft_mapping.price)
         
         return sqft_mapping.price if sqft_mapping else Decimal('0.00')
     
@@ -308,55 +361,41 @@ class SubmitServiceResponsesView(APIView):
                     )
         
         elif question.question_type in ['describe', 'quantity']:
-            selected_options = response_data.get('selected_options', [])
-            
-            for option_data in selected_options:
-                option_id = option_data['option_id']
-                quantity = option_data.get('quantity', 1)
-                option = get_object_or_404(QuestionOption, id=option_id)
-                
-                CustomerOptionResponse.objects.create(
-                    question_response=question_response,
-                    option=option,
-                    quantity=quantity
-                )
-            
-            package_adjustment = self._calculate_options_adjustment(
-                question, selected_options, package, base_sqft_price
+            # Use stored responses to prevent duplication
+            package_adjustment = self._calculate_options_question_adjustment_from_stored(
+                question_response, package, base_sqft_price
             )
         
         elif question.question_type == 'multiple_yes_no':
-            sub_question_answers = response_data.get('sub_question_answers', [])
-            
-            # Store sub-question responses
-            for sub_answer in sub_question_answers:
-                if sub_answer.get('answer') is True:
-                    sub_question_id = sub_answer['sub_question_id']
-                    sub_question = get_object_or_404(SubQuestion, id=sub_question_id)
-                    
-                    CustomerSubQuestionResponse.objects.create(
-                        question_response=question_response,
-                        sub_question=sub_question,
-                        answer=True
-                    )
-            
-            package_adjustment = self._calculate_sub_questions_adjustment(
-                sub_question_answers, package, base_sqft_price
+            # Use stored responses to prevent duplication
+            package_adjustment = self._calculate_sub_questions_adjustment_from_stored(
+                question_response, package, base_sqft_price
             )
+        
+        elif question.question_type == 'conditional':
+            # Handle conditional questions (same as yes_no for now)
+            if response_data.get('yes_no_answer') is True:
+                pricing = QuestionPricing.objects.filter(
+                    question=question, package=package
+                ).first()
+                if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                    package_adjustment = self._apply_pricing_rule(
+                        pricing.yes_pricing_type, pricing.yes_value,
+                        pricing.value_type, base_sqft_price
+                    )
         
         return package_adjustment
     
-    def _calculate_options_adjustment(self, question, selected_options, package, base_sqft_price):
-        """Calculate adjustment for option-based questions with quantity discounts"""
+    def _calculate_options_question_adjustment_from_stored(self, question_response, package, base_sqft_price):
+        """Calculate adjustment for options question using stored responses (prevents duplication)"""
         total_adjustment = Decimal('0.00')
         total_quantity = 0
         
-        # Calculate base adjustments and total quantity
+        # Calculate base adjustments and total quantity from stored responses
         option_adjustments = {}
-        for option_data in selected_options:
-            option_id = option_data['option_id']
-            quantity = option_data.get('quantity', 1)
-            option = QuestionOption.objects.get(id=option_id)
+        for option_response in question_response.option_responses.all():
+            option = option_response.option
+            quantity = option_response.quantity
             total_quantity += quantity
             
             pricing = OptionPricing.objects.filter(
@@ -368,7 +407,7 @@ class SubmitServiceResponsesView(APIView):
                     pricing.pricing_type, pricing.value,
                     pricing.value_type, base_sqft_price, quantity
                 )
-                option_adjustments[option_id] = {
+                option_adjustments[str(option.id)] = {
                     'base_adjustment': base_adjustment,
                     'quantity': quantity,
                     'option': option
@@ -376,12 +415,81 @@ class SubmitServiceResponsesView(APIView):
                 total_adjustment += base_adjustment
         
         # Apply quantity discounts if this is a quantity question
-        if question.question_type == 'quantity':
+        if question_response.question.question_type == 'quantity':
             total_adjustment = self._apply_quantity_discounts(
-                question, option_adjustments, total_quantity, total_adjustment
+                question_response.question, option_adjustments, total_quantity, total_adjustment
             )
         
         return total_adjustment
+    
+    def _calculate_sub_questions_adjustment_from_stored(self, question_response, package, base_sqft_price):
+        """Calculate adjustment for multiple yes/no questions using stored responses"""
+        total_adjustment = Decimal('0.00')
+        
+        print(f"[DEBUG] Processing sub-questions from stored responses with base_sqft_price={base_sqft_price}")
+        
+        for sub_response in question_response.sub_question_responses.all():
+            if sub_response.answer:  # Only process True answers
+                sub_question = sub_response.sub_question
+                
+                # Get pricing for this sub-question and package
+                pricing = SubQuestionPricing.objects.filter(
+                    sub_question=sub_question, 
+                    package=package
+                ).first()
+                
+                if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                    adjustment = self._apply_pricing_rule(
+                        pricing.yes_pricing_type, 
+                        pricing.yes_value,
+                        pricing.value_type, 
+                        base_sqft_price
+                    )
+                    print(f"[DEBUG] Sub-question {sub_question.id} adjustment: {adjustment}")
+                    total_adjustment += adjustment
+                else:
+                    print(f"[DEBUG] Sub-question {sub_question.id} pricing ignored or not found")
+        
+        print(f"[DEBUG] Total sub-questions adjustment: {total_adjustment}")
+        return total_adjustment
+    
+    def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
+        """Apply pricing rule based on type and value type"""
+        if pricing_type in ['ignore', 'bid_in_person']:
+            return Decimal('0.00')
+        
+        print(f"[DEBUG] Pricing calculation: type={pricing_type}, value={value}, value_type={value_type}, base_sqft_price={base_sqft_price}, quantity={quantity}")
+        
+        # Calculate base amount based on value_type
+        if value_type == 'percent':
+            if base_sqft_price == 0:
+                print(f"[DEBUG] Warning: base_sqft_price is 0, percentage calculation will result in 0")
+                base_amount = Decimal('0.00')
+            else:
+                base_amount = base_sqft_price * (Decimal(str(value)) / Decimal('100'))
+                print(f"[DEBUG] Percentage calculation: {base_sqft_price} * ({value}/100) = {base_amount}")
+        else:
+            # Fixed amount
+            base_amount = Decimal(str(value))
+            print(f"[DEBUG] Fixed amount: {base_amount}")
+        
+        # Apply quantity multiplier for relevant pricing types
+        if pricing_type == 'per_quantity':
+            base_amount *= quantity
+            print(f"[DEBUG] Applied per_quantity: {base_amount}")
+        elif pricing_type in ['upcharge_percent', 'discount_percent', 'fixed_price'] and quantity > 1:
+            # For quantity questions, multiply by quantity
+            base_amount *= quantity
+            print(f"[DEBUG] Applied quantity multiplier: {base_amount}")
+        
+        # Apply sign based on pricing type
+        if pricing_type == 'discount_percent':
+            result = -base_amount
+            print(f"[DEBUG] Applied discount (negative): {result}")
+            return result
+        else:
+            print(f"[DEBUG] Final result (positive): {base_amount}")
+            return base_amount
     
     def _apply_quantity_discounts(self, question, option_adjustments, total_quantity, base_total):
         """Apply quantity discounts for quantity-type questions"""
@@ -420,103 +528,10 @@ class SubmitServiceResponsesView(APIView):
         
         return discounted_total
     
-    def _calculate_sub_questions_adjustment(self, sub_question_answers, package, base_sqft_price):
-        """Calculate adjustment for multiple yes/no questions - FIXED VERSION"""
-        total_adjustment = Decimal('0.00')
-        processed_sub_questions = set()
-        
-        print(f"[DEBUG] Processing sub-questions with base_sqft_price={base_sqft_price}")
-        
-        for sub_answer in sub_question_answers:
-            if sub_answer.get('answer') is True:
-                sub_question_id = sub_answer['sub_question_id']
-                
-                if sub_question_id in processed_sub_questions:
-                    continue
-                processed_sub_questions.add(sub_question_id)
-                
-                try:
-                    sub_question = SubQuestion.objects.get(id=sub_question_id)
-                    
-                    # Get pricing for this sub-question and package
-                    pricing = SubQuestionPricing.objects.filter(
-                        sub_question=sub_question, 
-                        package=package
-                    ).first()
-                    
-                    if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
-                        adjustment = self._apply_pricing_rule(
-                            pricing.yes_pricing_type, 
-                            pricing.yes_value,
-                            pricing.value_type, 
-                            base_sqft_price
-                        )
-                        print(f"[DEBUG] Sub-question {sub_question_id} adjustment: {adjustment}")
-                        total_adjustment += adjustment
-                    else:
-                        print(f"[DEBUG] Sub-question {sub_question_id} pricing ignored or not found")
-                        
-                except SubQuestion.DoesNotExist:
-                    print(f"[ERROR] Sub-question {sub_question_id} not found")
-                    continue
-        
-        print(f"[DEBUG] Total sub-questions adjustment: {total_adjustment}")
-        return total_adjustment
-    
-    def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
-        """Apply pricing rule based on type and value type - FIXED VERSION"""
-        if pricing_type in ['ignore', 'bid_in_person']:
-            return Decimal('0.00')
-        
-        print(f"[DEBUG] Pricing calculation: type={pricing_type}, value={value}, value_type={value_type}, base_sqft_price={base_sqft_price}, quantity={quantity}")
-        
-        # Calculate base amount based on value_type
-        if value_type == 'percent':
-            if base_sqft_price == 0:
-                print(f"[DEBUG] Warning: base_sqft_price is 0, percentage calculation will result in 0")
-                base_amount = Decimal('0.00')
-            else:
-                base_amount = base_sqft_price * (Decimal(str(value)) / Decimal('100'))
-                print(f"[DEBUG] Percentage calculation: {base_sqft_price} * ({value}/100) = {base_amount}")
-        else:
-            # Fixed amount
-            base_amount = Decimal(str(value))
-            print(f"[DEBUG] Fixed amount: {base_amount}")
-        
-        # Apply quantity multiplier for relevant pricing types
-        if pricing_type == 'per_quantity':
-            base_amount *= quantity
-            print(f"[DEBUG] Applied per_quantity: {base_amount}")
-        elif pricing_type in ['upcharge_percent', 'discount_percent', 'fixed_price'] and quantity > 1:
-            # For quantity questions, multiply by quantity
-            base_amount *= quantity
-            print(f"[DEBUG] Applied quantity multiplier: {base_amount}")
-        
-        # Apply sign based on pricing type
-        if pricing_type == 'discount_percent':
-            result = -base_amount
-            print(f"[DEBUG] Applied discount (negative): {result}")
-            return result
-        else:
-            print(f"[DEBUG] Final result (positive): {base_amount}")
-            return base_amount
-    
     def _generate_all_package_quotes(self, service_selection, submission):
-        """Generate quotes for ALL packages in the service with new pricing logic"""
+        """Generate quotes for ALL packages in the service with correct package-specific pricing"""
         service = service_selection.service
         packages = Package.objects.filter(service=service, is_active=True)
-        
-        # Get base square footage price
-        if submission.size_range:
-            sqft_mappings = ServicePackageSizeMapping.objects.filter(
-                service_package__service=service,
-                global_size=submission.size_range
-            ).select_related('service_package', 'global_size')
-            
-            # Create mapping dict for quick lookup
-            sqft_pricing = {mapping.service_package_id: mapping.price for mapping in sqft_mappings}
-        else:
-            sqft_pricing = {}
         
         surcharge_applied = False
         surcharge_amount_applied = Decimal('0.00')
@@ -539,9 +554,11 @@ class SubmitServiceResponsesView(APIView):
         # Generate quotes for each package
         for package in packages:
             base_price = package.base_price
-            sqft_price = sqft_pricing.get(package.id, Decimal('0.00'))
             
-            # Calculate package-specific question adjustments with new logic
+            # Get package-specific sqft price
+            sqft_price = self._get_package_sqft_price(submission, package)
+            
+            # Calculate package-specific question adjustments
             question_adjustments = self._calculate_package_specific_adjustments_new(
                 service_selection, package, sqft_price
             )
@@ -569,10 +586,10 @@ class SubmitServiceResponsesView(APIView):
         return surcharge_applied, surcharge_amount_applied
     
     def _calculate_package_specific_adjustments_new(self, service_selection, package, base_sqft_price):
-        """Calculate question adjustments specific to a package with new pricing logic"""
+        """Calculate question adjustments specific to a package with package-specific sqft pricing"""
         total_adjustment = Decimal('0.00')
         
-        print(f"[DEBUG] Calculating adjustments for package {package.id} with base_sqft_price={base_sqft_price}")
+        print(f"[DEBUG] Calculating adjustments for package {package.id} ({package.name}) with package_sqft_price={base_sqft_price}")
         
         for question_response in service_selection.question_responses.all():
             question = question_response.question
@@ -591,69 +608,33 @@ class SubmitServiceResponsesView(APIView):
                         total_adjustment += adjustment
             
             elif question.question_type in ['describe', 'quantity']:
-                # Get all option responses for this question
-                adjustment = self._calculate_options_question_adjustment(
+                adjustment = self._calculate_options_question_adjustment_from_stored(
                     question_response, package, base_sqft_price
                 )
                 print(f"[DEBUG] Options question {question.id} adjustment for package {package.id}: {adjustment}")
                 total_adjustment += adjustment
             
             elif question.question_type == 'multiple_yes_no':
-                # Build sub_question_answers from stored responses
-                sub_question_answers = []
-                processed_sub_questions = set()
-                
-                for sub_response in question_response.sub_question_responses.all():
-                    if sub_response.answer and str(sub_response.sub_question.id) not in processed_sub_questions:
-                        sub_question_answers.append({
-                            'sub_question_id': str(sub_response.sub_question.id),
-                            'answer': True
-                        })
-                        processed_sub_questions.add(str(sub_response.sub_question.id))
-                
-                adjustment = self._calculate_sub_questions_adjustment(
-                    sub_question_answers, package, base_sqft_price
+                adjustment = self._calculate_sub_questions_adjustment_from_stored(
+                    question_response, package, base_sqft_price
                 )
                 print(f"[DEBUG] Multi yes/no question {question.id} adjustment for package {package.id}: {adjustment}")
                 total_adjustment += adjustment
-        
-        print(f"[DEBUG] Total adjustment for package {package.id}: {total_adjustment}")
-        return total_adjustment
-
-    def _calculate_options_question_adjustment(self, question_response, package, base_sqft_price):
-        """Calculate adjustment for options question using stored responses (prevents duplication)"""
-        total_adjustment = Decimal('0.00')
-        total_quantity = 0
-        
-        # Calculate base adjustments and total quantity from stored responses
-        option_adjustments = {}
-        for option_response in question_response.option_responses.all():
-            option = option_response.option
-            quantity = option_response.quantity
-            total_quantity += quantity
             
-            pricing = OptionPricing.objects.filter(
-                option=option, package=package
-            ).first()
-            
-            if pricing and pricing.pricing_type not in ['ignore', 'bid_in_person']:
-                base_adjustment = self._apply_pricing_rule(
-                    pricing.pricing_type, pricing.value,
-                    pricing.value_type, base_sqft_price, quantity
-                )
-                option_adjustments[str(option.id)] = {
-                    'base_adjustment': base_adjustment,
-                    'quantity': quantity,
-                    'option': option
-                }
-                total_adjustment += base_adjustment
+            elif question.question_type == 'conditional':
+                if question_response.yes_no_answer is True:
+                    pricing = QuestionPricing.objects.filter(
+                        question=question, package=package
+                    ).first()
+                    if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                        adjustment = self._apply_pricing_rule(
+                            pricing.yes_pricing_type, pricing.yes_value,
+                            pricing.value_type, base_sqft_price
+                        )
+                        print(f"[DEBUG] Conditional question {question.id} adjustment for package {package.id}: {adjustment}")
+                        total_adjustment += adjustment
         
-        # Apply quantity discounts if this is a quantity question
-        if question_response.question.question_type == 'quantity':
-            total_adjustment = self._apply_quantity_discounts(
-                question_response.question, option_adjustments, total_quantity, total_adjustment
-            )
-        
+        print(f"[DEBUG] Total adjustment for package {package.id} ({package.name}): {total_adjustment}")
         return total_adjustment
 
     # Keep all other methods unchanged...
@@ -814,6 +795,7 @@ class SubmitServiceResponsesView(APIView):
             return any(sub.answer for sub in sub_responses)
         
         return False
+    
 
 class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     """Get detailed submission with all quotes"""
