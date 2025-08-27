@@ -51,7 +51,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         if results:
             ghl_contact_id = results[0]["id"]
             contact_payload = {
-                "firstName": submission.customer_name,
+                "firstName": submission.first_name,
                 "address1": submission.street_address,
                 "customFields": custom_fields
             }
