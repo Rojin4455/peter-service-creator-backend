@@ -236,20 +236,27 @@ class SubmitServiceResponsesView(APIView):
                 surcharge_for_submission = False
                 # Generate package quotes for ALL packages
                 surcharge_applied, surcharge_price = self._generate_all_package_quotes(service_selection, submission)
+                
+                print("+++++++++++++surcharge_applied, surcharge_price++++++++++",surcharge_applied, surcharge_price)
                 if surcharge_applied:
                     surcharge_for_submission = True
 
                 # After all services processed
-                if surcharge_for_submission:
-                    submission.quote_surcharge_applicable = True
-                    submission.total_surcharges = surcharge_price
+
+                    
+                    
                 
                 # Check if all services have responses
                 all_services_completed = self._check_all_services_completed(submission)
                 if all_services_completed:
                     submission.status = 'responses_completed'
                     submission.save()
+                if surcharge_for_submission:
+                    submission.quote_surcharge_applicable = True
+                    submission.total_surcharges = surcharge_price
 
+                submission.save()
+                print("submission.total_surcharges",submission.total_surcharges)
                 create_or_update_ghl_contact(submission)
                 
                 return Response({
@@ -820,17 +827,19 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
 
 # Step 8: Submit final quote
 class SubmitFinalQuoteView(APIView):
-    """Submit the final quote with updated pricing logic"""
+    """Submit the final quote with updated pricing logic including add-ons"""
     permission_classes = [AllowAny]
     
     def post(self, request, submission_id):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
+
+        print("submission: ", submission.total_surcharges)
         
         # Check if packages are already selected (from Step 8)
         if submission.status == 'packages_selected':
             # Packages already selected, just need final confirmation
             serializer = SubmitFinalQuoteSerializer(data=request.data)
-        elif submission.status == 'responses_completed':
+        elif submission.status == 'draft':
             # Need to select packages first, then submit
             serializer = SubmitFinalQuoteSerializer(data=request.data)
             if not request.data.get('selected_packages'):
@@ -870,7 +879,7 @@ class SubmitFinalQuoteView(APIView):
                 submission.additional_data = additional_data
                 submission.save()
                 
-                # Calculate final totals with new logic
+                # Calculate final totals with new logic (including add-ons)
                 if submission.final_total == Decimal('0.00'):
                     self._calculate_final_totals_new(submission)
                     
@@ -925,7 +934,7 @@ class SubmitFinalQuoteView(APIView):
         submission.save()
     
     def _calculate_final_totals_new(self, submission):
-        """Calculate final totals for the submission with new pricing logic"""
+        """Calculate final totals for the submission with new pricing logic including add-ons"""
         service_selections = submission.customerserviceselection_set.filter(
             selected_package__isnull=False
         )
@@ -933,7 +942,11 @@ class SubmitFinalQuoteView(APIView):
         total_base_price = Decimal('0.00')
         total_sqft_price = Decimal('0.00')
         total_adjustments = Decimal('0.00')
+        total_addons_price = Decimal('0.00')
         
+        print(f"[DEBUG] Calculating final totals for submission {submission.id}")
+        
+        # Calculate service totals
         for selection in service_selections:
             selected_quote = selection.package_quotes.filter(is_selected=True).first()
             if selected_quote:
@@ -943,15 +956,46 @@ class SubmitFinalQuoteView(APIView):
                 total_sqft_price += selected_quote.sqft_price
                 # Question adjustments (with new percentage/amount logic)
                 total_adjustments += selected_quote.question_adjustments
+                
+                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
         
-        # Final total includes base price + sqft price + adjustments + surcharges
-        final_total = total_base_price + total_sqft_price + total_adjustments + submission.total_surcharges
+        # Calculate add-ons total
+        if submission.addons.exists():
+            for addon in submission.addons.all():
+                total_addons_price += addon.base_price
+                print(f"[DEBUG] Add-on {addon.name}: price={addon.base_price}")
+        
+        print(f"[DEBUG] Total add-ons price: {total_addons_price}")
+        
+        # Final total includes base price + sqft price + adjustments + surcharges + add-ons
+        final_total = total_base_price + total_sqft_price + total_adjustments + submission.total_surcharges + total_addons_price
+        
+        print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + surcharges={submission.total_surcharges} + addons={total_addons_price} = {final_total}")
         
         # Update submission totals
         submission.total_base_price = total_base_price + total_sqft_price  # Combined base and sqft
         submission.total_adjustments = total_adjustments
+        submission.total_addons_price = total_addons_price  # Store add-ons total separately
         submission.final_total = final_total
         submission.save()
+        
+        print(f"[DEBUG] Updated submission totals: total_base_price={submission.total_base_price}, total_adjustments={submission.total_adjustments}, total_addons_price={submission.total_addons_price}, final_total={submission.final_total}")
+    
+    def _get_package_sqft_price(self, submission, package):
+        """Get the package-specific square footage price"""
+        if not submission.size_range:
+            return Decimal('0.00')
+            
+        sqft_mapping = ServicePackageSizeMapping.objects.filter(
+            service_package=package,
+            global_size=submission.size_range
+        ).first()
+
+        print(f"[DEBUG] sqft_mapping.price for package {package.id}: {sqft_mapping.price if sqft_mapping else 'None'}")
+        
+        return sqft_mapping.price if sqft_mapping else Decimal('0.00')
+    
+
 
 
 
