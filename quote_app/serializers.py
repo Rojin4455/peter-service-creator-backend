@@ -189,10 +189,12 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
         return FeaturePublicSerializer(features, many=True).data
 
 
+from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
+    size_range = GlobalSizePackageSerializer(read_only=True)
 
     class Meta:
         model = CustomerSubmission
