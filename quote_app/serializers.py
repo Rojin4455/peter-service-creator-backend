@@ -273,12 +273,29 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_package_quotes(self, obj):
-        # Only return selected quote if packages are selected, otherwise all quotes
+        # Get quotes depending on selection
         if obj.selected_package:
             quotes = obj.package_quotes.filter(is_selected=True)
         else:
             quotes = obj.package_quotes.all().order_by('package__order')
-        return CustomerPackageQuoteSerializer(quotes, many=True).data
+
+        # Filter out packages where all question pricing rules are "fixed_price"
+        filtered_quotes = []
+        for quote in quotes:
+            package = quote.package
+            pricing_rules = package.question_pricing.all()
+
+            # If the package has no rules, keep it
+            if not pricing_rules.exists():
+                filtered_quotes.append(quote)
+                continue
+
+            # Check if ALL rules are fixed_price
+            all_fixed = all(rule.yes_pricing_type == "fixed_price" for rule in pricing_rules)
+            if not all_fixed:
+                filtered_quotes.append(quote)
+
+        return CustomerPackageQuoteSerializer(filtered_quotes, many=True).data
 
     
 

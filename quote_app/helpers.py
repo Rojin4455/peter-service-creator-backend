@@ -60,6 +60,10 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 json=contact_payload,
                 headers=headers
             )
+
+
+
+
         else:
             contact_payload = {
                 "firstName": submission.first_name,
