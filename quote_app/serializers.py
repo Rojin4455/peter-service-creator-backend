@@ -279,21 +279,30 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         else:
             quotes = obj.package_quotes.all().order_by('package__order')
 
-        # Filter out packages where all question pricing rules are "fixed_price"
         filtered_quotes = []
         for quote in quotes:
             package = quote.package
-            pricing_rules = package.question_pricing.all()
 
-            # If the package has no rules, keep it
-            if not pricing_rules.exists():
+            # Collect all pricing rules from question, sub-question, and option
+            q_rules = package.question_pricing.all()
+            sq_rules = package.sub_question_pricing.all()
+            o_rules = package.option_pricing.all()
+
+            # If package has no rules at all, keep it
+            if not q_rules.exists() and not sq_rules.exists() and not o_rules.exists():
                 filtered_quotes.append(quote)
                 continue
 
-            # Check if ALL rules are fixed_price
-            all_fixed = all(rule.yes_pricing_type == "fixed_price" for rule in pricing_rules)
-            if not all_fixed:
-                filtered_quotes.append(quote)
+            # Flatten all rules into a single list of pricing types
+            pricing_types = list(q.yes_pricing_type for q in q_rules) + \
+                            list(sq.yes_pricing_type for sq in sq_rules) + \
+                            list(o.pricing_type for o in o_rules)
+
+            # If ALL rules are fixed_price → skip
+            if all(p == "fixed_price" for p in pricing_types):
+                continue
+
+            filtered_quotes.append(quote)
 
         return CustomerPackageQuoteSerializer(filtered_quotes, many=True).data
 
