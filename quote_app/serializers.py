@@ -273,7 +273,6 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_package_quotes(self, obj):
-        # Get quotes depending on selection
         if obj.selected_package:
             quotes = obj.package_quotes.filter(is_selected=True)
         else:
@@ -283,23 +282,37 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         for quote in quotes:
             package = quote.package
 
-            # Collect all pricing rules from question, sub-question, and option
+            # Gather pricing rules
             q_rules = package.question_pricing.all()
             sq_rules = package.sub_question_pricing.all()
             o_rules = package.option_pricing.all()
 
-            # If package has no rules at all, keep it
-            if not q_rules.exists() and not sq_rules.exists() and not o_rules.exists():
+            # Collect only rules that match the customer's responses
+            active_rules = []
+
+            # Check question responses
+            for response in obj.question_responses.all():
+                # Yes/No type
+                if response.yes_no_answer is True:
+                    active_rules += list(q_rules.filter(question=response.question))
+
+                # Options type
+                for opt_response in response.option_responses.all():
+                    active_rules += list(o_rules.filter(option=opt_response.option))
+
+                # Sub-questions
+                for sub_resp in response.sub_question_responses.all():
+                    if sub_resp.yes_no_answer is True:
+                        active_rules += list(sq_rules.filter(sub_question=sub_resp.sub_question))
+
+            # If no active rules → keep it
+            if not active_rules:
                 filtered_quotes.append(quote)
                 continue
 
-            # Flatten all rules into a single list of pricing types
-            pricing_types = list(q.yes_pricing_type for q in q_rules) + \
-                            list(sq.yes_pricing_type for sq in sq_rules) + \
-                            list(o.pricing_type for o in o_rules)
-
-            # If ALL rules are fixed_price → skip
-            if all(p == "fixed_price" for p in pricing_types):
+            # Skip package if *all active rules* are fixed_price
+            effective_types = [r.yes_pricing_type if hasattr(r, "yes_pricing_type") else r.pricing_type for r in active_rules]
+            if all(t == "fixed_price" for t in effective_types):
                 continue
 
             filtered_quotes.append(quote)
