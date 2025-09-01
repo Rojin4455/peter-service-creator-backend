@@ -843,10 +843,10 @@ class SubmitFinalQuoteView(APIView):
         elif submission.status == 'draft' or submission.status == 'responses_completed':
             # Need to select packages first, then submit
             serializer = SubmitFinalQuoteSerializer(data=request.data)
-            if not request.data.get('selected_packages'):
-                return Response({
-                    'error': 'Please select packages first or use the package selection endpoint'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # if not request.data.get('selected_packages'):
+            #     return Response({
+            #         'error': 'Please select packages first or use the package selection endpoint'
+            #     }, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response({
                 'error': f'Invalid submission status: {submission.status}. Complete all steps first.'
