@@ -57,7 +57,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 existing_tags = [existing_tags]
 
             # Add new tag without duplication
-            if is_submit:
+            if not is_submit:
                 new_tag = "quote_requested"
             else:
                 new_tag = "quote_accepted"
