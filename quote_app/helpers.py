@@ -50,11 +50,27 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         # Step 3: Update or create
         if results:
             ghl_contact_id = results[0]["id"]
+
+            # Normalize tags to always be a list
+            existing_tags = results[0].get("tags", [])
+            if isinstance(existing_tags, str):
+                existing_tags = [existing_tags]
+
+            # Add new tag without duplication
+            if is_submit:
+                new_tag = "quote_requested"
+            else:
+                new_tag = "quote_accepted"
+
+            updated_tags = list(set(existing_tags + [new_tag]))
+
             contact_payload = {
                 "firstName": submission.first_name,
                 "address1": submission.street_address,
-                "customFields": custom_fields
+                "customFields": custom_fields,
+                "tags": updated_tags
             }
+
             contact_response = requests.put(
                 f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
                 json=contact_payload,
@@ -71,7 +87,8 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 "phone": submission.customer_phone,
                 "address1": submission.street_address,
                 "locationId": location_id,
-                "customFields": custom_fields
+                "customFields": custom_fields,
+                "tags":["quote_requested"]
             }
             contact_response = requests.post(
                 "https://services.leadconnectorhq.com/contacts/",
