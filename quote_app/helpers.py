@@ -60,13 +60,29 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 "field_value": quoted_date_value
             })
 
+        GHL_SERVICE_OPTIONS = {
+            "Service 1": "Service 1",
+            "Service 2": "Service 2",
+            "Service 3": "Service 3",
+            "Service 4": "Service 4",
+            "Service 5": "Service 5",
+            "Service 6": "Service 6",
+            "Service 7": "Service 7",
+            "Service 8": "Service 8",
+            "Service 9": "Service 9",
+            "Service 10": "Service 10",
+        }
+
         # Quoted Services (collect names of all selected services)
         quoted_services = list(submission.selected_services.values_list("name", flat=True))
         if quoted_services:
-            custom_fields.append({
-                "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
-                "field_value": quoted_services  # GHL expects list for TextBox List
-            })
+            # Only keep services that exist in GHL picklist
+            mapped_services = [GHL_SERVICE_OPTIONS[s] for s in quoted_services if s in GHL_SERVICE_OPTIONS]
+            if mapped_services:
+                custom_fields.append({
+                    "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
+                    "field_value": mapped_services  # Pass as list of labels
+                })
 
         if submission.size_range:
             min_sqft = submission.size_range.min_sqft
