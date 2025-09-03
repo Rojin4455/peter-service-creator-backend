@@ -76,13 +76,11 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         # Quoted Services (collect names of all selected services)
         quoted_services = list(submission.selected_services.values_list("name", flat=True))
         if quoted_services:
-            # Only keep services that exist in GHL picklist
-            mapped_services = [GHL_SERVICE_OPTIONS[s] for s in quoted_services if s in GHL_SERVICE_OPTIONS]
-            if mapped_services:
-                custom_fields.append({
-                    "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
-                    "field_value": mapped_services  # Pass as list of labels
-                })
+            services_string = ", ".join(quoted_services)  # Convert list to comma-separated string
+            custom_fields.append({
+                "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
+                "field_value": services_string
+            })
 
         if submission.size_range:
             min_sqft = submission.size_range.min_sqft
