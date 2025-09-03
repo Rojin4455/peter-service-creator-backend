@@ -60,25 +60,13 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 "field_value": quoted_date_value
             })
 
-        GHL_SERVICE_OPTIONS = {
-            "Service 1": "Service 1",
-            "Service 2": "Service 2",
-            "Service 3": "Service 3",
-            "Service 4": "Service 4",
-            "Service 5": "Service 5",
-            "Service 6": "Service 6",
-            "Service 7": "Service 7",
-            "Service 8": "Service 8",
-            "Service 9": "Service 9",
-            "Service 10": "Service 10",
-        }
 
         # Quoted Services (collect names of all selected services)
         quoted_services = list(submission.selected_services.values_list("name", flat=True))
         if quoted_services:
-            services_string = ", ".join(quoted_services)  # Convert list to comma-separated string
+            services_string = ", ".join(quoted_services)  # e.g. "Service 1, Service 3, Service 7"
             custom_fields.append({
-                "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
+                "id": "rRNtL51RsGoGDCAq3YrN",  # Selected Services custom field (TEXT)
                 "field_value": services_string
             })
 
