@@ -41,27 +41,51 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         elif "contact" in search_data and isinstance(search_data["contact"], dict):
             results = [search_data["contact"]]
 
-        # Common payload fields
+        # --- Build custom fields payload ---
+        # Booking/Quote link
         custom_fields = [{
             "id": "vWNjYOQajJAPtx2Hkq2e",
-            "field_value": f"{config("BASE_FRONTEND_URI")}/booking?submission_id={submission.id}" if not is_submit else f"{config("BASE_FRONTEND_URI")}/quote/details/{submission.id}"
+            "field_value": (
+                f"{config('BASE_FRONTEND_URI')}/booking?submission_id={submission.id}"
+                if not is_submit else
+                f"{config('BASE_FRONTEND_URI')}/quote/details/{submission.id}"
+            )
         }]
+
+        # Quoted Date (use submission.updated_at or created_at or explicit expires_at)
+        quoted_date_value = submission.created_at.strftime("%Y-%m-%d") if submission.created_at else None
+        if quoted_date_value:
+            custom_fields.append({
+                "id": "1MfidSbDFjvs1vJ6kpKN",  # Quoted Date field
+                "field_value": quoted_date_value
+            })
+
+        # Quoted Services (collect names of all selected services)
+        quoted_services = list(submission.selected_services.values_list("name", flat=True))
+        if quoted_services:
+            custom_fields.append({
+                "id": "KdMeqRIzPqspibt3aRIh",  # Quoted Services field
+                "field_value": quoted_services  # GHL expects list for TextBox List
+            })
+
+        if submission.size_range:
+            min_sqft = submission.size_range.min_sqft
+            max_sqft = submission.size_range.max_sqft
+            house_size_value = f"{min_sqft} - {max_sqft}"
+            custom_fields.append({
+                "id": "MqkYwdgeT2Kk9EgFa5bn",  # House Size field
+                "field_value": house_size_value
+            })
 
         # Step 3: Update or create
         if results:
             ghl_contact_id = results[0]["id"]
 
-            # Normalize tags to always be a list
             existing_tags = results[0].get("tags", [])
             if isinstance(existing_tags, str):
                 existing_tags = [existing_tags]
 
-            # Add new tag without duplication
-            if not is_submit:
-                new_tag = "quote_requested"
-            else:
-                new_tag = "quote_accepted"
-
+            new_tag = "quote_requested" if not is_submit else "quote_accepted"
             updated_tags = list(set(existing_tags + [new_tag]))
 
             contact_payload = {
@@ -77,9 +101,6 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 headers=headers
             )
 
-
-
-
         else:
             contact_payload = {
                 "firstName": submission.first_name,
@@ -88,7 +109,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 "address1": submission.street_address,
                 "locationId": location_id,
                 "customFields": custom_fields,
-                "tags":["quote_requested"]
+                "tags": ["quote_requested"]
             }
             contact_response = requests.post(
                 "https://services.leadconnectorhq.com/contacts/",
@@ -108,4 +129,5 @@ def create_or_update_ghl_contact(submission, is_submit=False):
 
     except Exception as e:
         print(f"Error syncing contact: {e}")
+
 
