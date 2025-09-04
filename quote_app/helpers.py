@@ -3,7 +3,7 @@ from accounts.models import GHLAuthCredentials
 import requests
 from decouple import config
 
-def create_or_update_ghl_contact(submission, is_submit=False, is_declined=True):
+def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False):
     try:
         credentials = GHLAuthCredentials.objects.first()
         token = credentials.access_token

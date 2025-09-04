@@ -1190,7 +1190,7 @@ class DeclineSubmissionView(APIView):
     Endpoint to decline a submission
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request, submission_id):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
 
@@ -1203,7 +1203,7 @@ class DeclineSubmissionView(APIView):
         submission.status = "declined"
         submission.declined_at = timezone.now()
         submission.save(update_fields=["status", "declined_at"])        
-        create_or_update_ghl_contact(submission)
+        create_or_update_ghl_contact(submission,is_declined=True)
 
         return Response(
             {
