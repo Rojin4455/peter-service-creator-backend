@@ -3,7 +3,7 @@ from accounts.models import GHLAuthCredentials
 import requests
 from decouple import config
 
-def create_or_update_ghl_contact(submission, is_submit=False):
+def create_or_update_ghl_contact(submission, is_submit=False, is_declined=True):
     try:
         credentials = GHLAuthCredentials.objects.first()
         token = credentials.access_token
@@ -56,7 +56,16 @@ def create_or_update_ghl_contact(submission, is_submit=False):
         quoted_date_value = submission.created_at.strftime("%Y-%m-%d") if submission.created_at else None
         if quoted_date_value:
             custom_fields.append({
-                "id": "1MfidSbDFjvs1vJ6kpKN",  # Quoted Date field
+                "id": "1MfidSbDFjvs1vJ6kpKN",  # Quote Declined Date
+                "field_value": quoted_date_value
+            })
+
+        
+
+        if is_declined:
+            quoted_date_value = submission.declined_at.strftime("%Y-%m-%d") if submission.declined_at else None
+            custom_fields.append({
+                "id": "v2wQQet3CDiIRQVA0h40",  # Quoted Date field
                 "field_value": quoted_date_value
             })
 
@@ -87,8 +96,12 @@ def create_or_update_ghl_contact(submission, is_submit=False):
             if isinstance(existing_tags, str):
                 existing_tags = [existing_tags]
 
-            new_tag = "quote_requested" if not is_submit else "quote_accepted"
-            updated_tags = list(set(existing_tags + [new_tag]))
+            new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
+
+            if is_declined:
+                new_tags.append("quote_declined")  # keep naming consistent
+
+            updated_tags = list(set(existing_tags + new_tags))
 
             contact_payload = {
                 "firstName": submission.first_name,
@@ -111,7 +124,7 @@ def create_or_update_ghl_contact(submission, is_submit=False):
                 "address1": submission.street_address,
                 "locationId": location_id,
                 "customFields": custom_fields,
-                "tags": ["quote_requested"]
+                "tags": ["quote_requested"] + ["quote_declined"] if is_declined else []
             }
             contact_response = requests.post(
                 "https://services.leadconnectorhq.com/contacts/",

@@ -11,6 +11,7 @@ class CustomerSubmission(models.Model):
         ('responses_completed', 'Responses Completed'),
         ('packages_selected', 'Packages Selected'),
         ('submitted', 'Submitted'),
+        ('declined', 'Declined'),
         ('expired', 'Expired'),
     ]
 
@@ -24,7 +25,7 @@ class CustomerSubmission(models.Model):
     customer_phone = models.CharField(max_length=20)
     postal_code = models.CharField(max_length=20, null=True, blank=True)
     ghl_contact_id = models.CharField(max_length=100, null=True, blank=True)
-
+    declined_at = models.DateTimeField(null=True, blank=True)
 
     allow_sms = models.BooleanField(default=False)
     allow_email = models.BooleanField(default=True)

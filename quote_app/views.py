@@ -1181,3 +1181,35 @@ class AddAddOnsToSubmissionView(APIView):
             })
         except Exception as e:
             return Response({"error": str(e)}, status=400)
+        
+
+
+
+class DeclineSubmissionView(APIView):
+    """
+    Endpoint to decline a submission
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+
+        if submission.status == "declined":
+            return Response(
+                {"message": "Submission is already declined."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        submission.status = "declined"
+        submission.declined_at = timezone.now()
+        submission.save(update_fields=["status", "declined_at"])        
+        create_or_update_ghl_contact(submission)
+
+        return Response(
+            {
+                "message": f"Submission {submission_id} has been declined.",
+                "submission_id": str(submission.id),
+                "status": submission.status,
+            },
+            status=status.HTTP_200_OK,
+        )

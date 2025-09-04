@@ -302,7 +302,7 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
 
                 # Sub-questions
                 for sub_resp in response.sub_question_responses.all():
-                    if sub_resp.yes_no_answer is True:
+                    if sub_resp.answer is True:  # ✅ use 'answer' field
                         active_rules += list(sq_rules.filter(sub_question=sub_resp.sub_question))
 
             # If no active rules → keep it
