@@ -117,6 +117,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             )
 
         else:
+   
             contact_payload = {
                 "firstName": submission.first_name,
                 "email": submission.customer_email,
@@ -124,7 +125,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                 "address1": submission.street_address,
                 "locationId": location_id,
                 "customFields": custom_fields,
-                "tags": ["quote_requested"] + ["quote_declined"] if is_declined else []
+                "tags": ["quote_requested"]
             }
             contact_response = requests.post(
                 "https://services.leadconnectorhq.com/contacts/",
