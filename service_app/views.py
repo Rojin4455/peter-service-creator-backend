@@ -30,7 +30,7 @@ from .serializers import (
     QuestionOptionSerializer, QuestionPricingSerializer, OptionPricingSerializer,
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
     ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
-    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer
+    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer,ServicePackageSizeMappingNewSerializer
 )
 
 
@@ -908,21 +908,38 @@ class AutoMapGlobalToServicePackages(APIView):
     
 
 from rest_framework.generics import ListAPIView
+from collections import defaultdict
+
 
 class ServiceMappedSizesAPIView(ListAPIView):
     """
     GET /api/services/{service_id}/mapped-sizes/
 
-    Retrieve all size mappings with prices for a given service.
+    Retrieve all size mappings with prices for a given service,
+    grouped by property type.
     """
     serializer_class = ServicePackageSizeMappingSerializer
+    pagination_class = None  # disable pagination for grouped response
 
     def get_queryset(self):
         service_id = self.kwargs['service_id']
-        return ServicePackageSizeMapping.objects.filter(
-            service_package__service_id=service_id
-        ).select_related('global_size', 'service_package')
-    
+        return (
+            ServicePackageSizeMapping.objects.filter(
+                service_package__service_id=service_id
+            )
+            .select_related('global_size__property_type', 'service_package')
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        grouped = defaultdict(list)
+        for item in serializer.data:
+            property_type = item["property_type_name"]
+            grouped[property_type].append(item)
+
+        return Response(grouped)
 
 
 class GlobalSizePackageDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -1137,3 +1154,79 @@ class QuantityDiscountViewSet(viewsets.ModelViewSet):
         if option_id:
             queryset = queryset.filter(option_id=option_id)
         return queryset
+    
+
+
+class ServicePackageSizeMappingUpdateView(generics.UpdateAPIView):
+    queryset = ServicePackageSizeMapping.objects.all()
+    serializer_class = ServicePackageSizeMappingNewSerializer
+    lookup_field = "id"  # Assuming UUID or PK field
+
+
+class ServicePackageSizeMappingBulkUpdateView(APIView):
+    """
+    PUT /api/service-package-size-mappings/bulk-update/
+
+    Payload: [
+        {"id": 1, "pricing_type": "upcharge", "price": "300.00"},
+        {"id": 2, "pricing_type": "bid_in_person"}
+    ]
+    """
+    def put(self, request, *args, **kwargs):
+        data = request.data
+        if not isinstance(data, list):
+            return Response(
+                {"detail": "Expected a list of objects for bulk update."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated_objects = []
+
+        with transaction.atomic():
+            for item in data:
+                try:
+                    instance = ServicePackageSizeMapping.objects.get(id=item.get("id"))
+                except ServicePackageSizeMapping.DoesNotExist:
+                    return Response(
+                        {"detail": f"Object with id {item.get('id')} not found."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                serializer = ServicePackageSizeMappingNewSerializer(
+                    instance, data=item, partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                serializer.save()
+                updated_objects.append(serializer.data)
+
+        return Response(updated_objects, status=status.HTTP_200_OK)
+
+
+class ServicePackageSizeMappingByServiceView(generics.ListAPIView):
+    serializer_class = ServicePackageSizeMappingNewSerializer
+
+    def get_queryset(self):
+        service_id = self.kwargs.get("service_id")
+        return ServicePackageSizeMapping.objects.filter(service_package__service_id=service_id)
+
+
+from service_app.serializers import ServiceSizePackageSerializer
+
+class ServiceMappedSizesStructuredAPIView(generics.ListAPIView):
+    """
+    GET /api/service/services/{service_id}/mapped-sizes/
+
+    Returns all global sizes with service-specific pricing per package.
+    """
+    serializer_class = ServiceSizePackageSerializer
+
+    def get_queryset(self):
+        service_id = self.kwargs['service_id']
+        return GlobalSizePackage.objects.filter(
+            servicepackagesizemapping__service_package__service_id=service_id
+        ).distinct().select_related('property_type')
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['service_id'] = self.kwargs['service_id']
+        return context

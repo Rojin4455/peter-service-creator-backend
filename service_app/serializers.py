@@ -658,12 +658,26 @@ class ServicePackageSizeMappingSerializer(serializers.ModelSerializer):
         model = ServicePackageSizeMapping
         fields = [
             'id', 'service_package', 'service_package_name', 'global_size', 
-            'global_size_range', 'property_type_name', 'price'
+            'global_size_range', 'property_type_name', 'price','pricing_type'
         ]
 
     def get_global_size_range(self, obj):
         return f"{obj.global_size.min_sqft} - {obj.global_size.max_sqft} sqft"
     
+
+
+class ServicePackageSizeMappingNewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServicePackageSizeMapping
+        fields = ['id', 'service_package', 'global_size', 'pricing_type', 'price', 'created_at']
+
+    def validate(self, data):
+        # Enforce rule: bid_in_person must always have price 0
+        if data.get('pricing_type') == 'bid_in_person':
+            data['price'] = 0
+        return data
+    
+
 
 
 
@@ -680,3 +694,37 @@ class QuantityDiscountSerializer(serializers.ModelSerializer):
             'id', 'question', 'option', 'scope',
             'discount_type', 'value', 'min_quantity', 'created_at'
         ]
+
+
+class ServicePackagePriceSerializer(serializers.ModelSerializer):
+    service_package_name = serializers.CharField(source='service_package.name', read_only=True)
+
+    class Meta:
+        model = ServicePackageSizeMapping
+        fields = ['id', 'service_package', 'service_package_name', 'price', 'pricing_type']
+
+
+class ServiceSizePackageSerializer(serializers.ModelSerializer):
+    property_type_name = serializers.CharField(source='property_type.name', read_only=True)
+    service_prices = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GlobalSizePackage
+        fields = [
+            'id',
+            'property_type',
+            'property_type_name',
+            'min_sqft',
+            'max_sqft',
+            'order',
+            'service_prices'
+        ]
+
+    def get_service_prices(self, obj):
+        service_id = self.context.get('service_id')
+        mappings = ServicePackageSizeMapping.objects.filter(
+            service_package__service_id=service_id,
+            global_size=obj
+        ).select_related('service_package')
+
+        return ServicePackagePriceSerializer(mappings, many=True).data

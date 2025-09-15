@@ -88,6 +88,8 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                 "field_value": house_size_value
             })
 
+
+        
         # Step 3: Update or create
         if results:
             ghl_contact_id = results[0]["id"]

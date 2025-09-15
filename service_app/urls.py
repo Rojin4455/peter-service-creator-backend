@@ -118,10 +118,24 @@ urlpatterns = [
     
     # Service Package Mappings (updated)
     path('services/<uuid:service_id>/auto-map-packages/', views.AutoMapGlobalToServicePackages.as_view(), name='auto-map-packages'),
-    path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesAPIView.as_view(), name='service-mapped-sizes'),
+    path('services/<uuid:service_id>/mapped-sizes/', views.ServiceMappedSizesStructuredAPIView.as_view(), name='service-mapped-sizes'),
 
 
     path("addons/", views.addon_list_create, name="addon-list-create"),
     path("addons/<uuid:pk>/", views.addon_detail, name="addon-detail"),
+
+    path('service-package-size-mappings/<int:id>/update/', views.ServicePackageSizeMappingUpdateView.as_view(), name='service-package-size-mapping-update'),
+    path(
+        "service-package-size-mappings/bulk-update/",
+        views.ServicePackageSizeMappingBulkUpdateView.as_view(),
+        name="service-package-size-mapping-bulk-update",
+    ),
+
+    path(
+        'services/<uuid:service_id>/package-size-mappings/',
+        views.ServicePackageSizeMappingByServiceView.as_view(),
+        name='service-package-size-mappings-by-service'
+    ),
+
 
 ]+ router.urls

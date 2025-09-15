@@ -47,7 +47,7 @@ class Service(models.Model):
     """Main service model"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
-    description = models.TextField()
+    description = models.TextField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     image = models.ImageField(upload_to="services/", blank=True, null=True)  # ✅ added field
     order = models.PositiveIntegerField(default=0)
@@ -569,16 +569,44 @@ class GlobalPackageTemplate(models.Model):
 
 class ServicePackageSizeMapping(models.Model):
     """Actual price mapping for service-level packages against size range"""
+
+    PRICING_TYPES = [
+        ('upcharge', 'Fixed Upcharge Amount'),
+        ('bid_in_person', 'Bid In Person'),
+    ]
+
     # id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    service_package = models.ForeignKey(Package, related_name='size_pricings', on_delete=models.CASCADE)
-    global_size = models.ForeignKey(GlobalSizePackage, on_delete=models.CASCADE)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    service_package = models.ForeignKey(
+        'Package',
+        related_name='size_pricings',
+        on_delete=models.CASCADE
+    )
+    global_size = models.ForeignKey(
+        'GlobalSizePackage',
+        on_delete=models.CASCADE
+    )
+    pricing_type = models.CharField(
+        max_length=20,
+        choices=PRICING_TYPES,
+        default='upcharge'
+    )
+    price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0
+    )
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = 'service_package_size_mappings'
         unique_together = ['service_package', 'global_size']
         ordering = ['global_size__property_type__order', 'global_size__order']
+
+    def save(self, *args, **kwargs):
+        # If pricing_type is bid_in_person, force price = 0
+        if self.pricing_type == 'bid_in_person':
+            self.price = 0
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.service_package} ({self.global_size}) - ${self.price}"
