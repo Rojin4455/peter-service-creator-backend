@@ -178,6 +178,8 @@ class SubmitServiceResponsesView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request, submission_id, service_id):
+
+        self.bid_in_person=False
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         service_selection = get_object_or_404(
             CustomerServiceSelection, 
@@ -255,7 +257,8 @@ class SubmitServiceResponsesView(APIView):
                 if surcharge_for_submission:
                     submission.quote_surcharge_applicable = True
                     submission.total_surcharges = surcharge_price
-
+                
+                submission.is_bid_in_person = self.bid_in_person
                 submission.save()
                 print("submission.total_surcharges",submission.total_surcharges)
                 create_or_update_ghl_contact(submission)
@@ -362,7 +365,7 @@ class SubmitServiceResponsesView(APIView):
                 pricing = QuestionPricing.objects.filter(
                     question=question, package=package
                 ).first()
-                if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     package_adjustment = self._apply_pricing_rule(
                         pricing.yes_pricing_type, pricing.yes_value,
                         pricing.value_type, base_sqft_price
@@ -386,7 +389,7 @@ class SubmitServiceResponsesView(APIView):
                 pricing = QuestionPricing.objects.filter(
                     question=question, package=package
                 ).first()
-                if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     package_adjustment = self._apply_pricing_rule(
                         pricing.yes_pricing_type, pricing.yes_value,
                         pricing.value_type, base_sqft_price
@@ -410,7 +413,7 @@ class SubmitServiceResponsesView(APIView):
                 option=option, package=package
             ).first()
             
-            if pricing and pricing.pricing_type not in ['ignore', 'bid_in_person']:
+            if pricing and pricing.pricing_type not in ['ignore', 'fixed_price']:
                 base_adjustment = self._apply_pricing_rule(
                     pricing.pricing_type, pricing.value,
                     pricing.value_type, base_sqft_price, quantity
@@ -421,6 +424,10 @@ class SubmitServiceResponsesView(APIView):
                     'option': option
                 }
                 total_adjustment += base_adjustment
+            elif pricing and pricing.pricing_type in ['fixed_price']:
+                print("reached herererreeerererererereerererrrrrrrr122")
+                self.bid_in_person=True
+        
         
         # Apply quantity discounts if this is a quantity question
         if question_response.question.question_type == 'quantity':
@@ -446,7 +453,7 @@ class SubmitServiceResponsesView(APIView):
                     package=package
                 ).first()
                 
-                if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     adjustment = self._apply_pricing_rule(
                         pricing.yes_pricing_type, 
                         pricing.yes_value,
@@ -455,7 +462,9 @@ class SubmitServiceResponsesView(APIView):
                     )
                     print(f"[DEBUG] Sub-question {sub_question.id} adjustment: {adjustment}")
                     total_adjustment += adjustment
-                else:
+                elif pricing and pricing.yes_pricing_type in ['fixed_price']:
+                    print("reached herererreeerererererereerererrrrrrrr122")
+                    self.bid_in_person=True
                     print(f"[DEBUG] Sub-question {sub_question.id} pricing ignored or not found")
         
         print(f"[DEBUG] Total sub-questions adjustment: {total_adjustment}")
@@ -463,7 +472,7 @@ class SubmitServiceResponsesView(APIView):
     
     def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
         """Apply pricing rule based on type and value type"""
-        if pricing_type in ['ignore', 'bid_in_person']:
+        if pricing_type in ['ignore', 'fixed_price']:
             return Decimal('0.00')
         
         print(f"[DEBUG] Pricing calculation: type={pricing_type}, value={value}, value_type={value_type}, base_sqft_price={base_sqft_price}, quantity={quantity}")
@@ -607,13 +616,17 @@ class SubmitServiceResponsesView(APIView):
                     pricing = QuestionPricing.objects.filter(
                         question=question, package=package
                     ).first()
-                    if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                    if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                         adjustment = self._apply_pricing_rule(
                             pricing.yes_pricing_type, pricing.yes_value,
                             pricing.value_type, base_sqft_price
                         )
                         print(f"[DEBUG] Yes/No question {question.id} adjustment for package {package.id}: {adjustment}")
                         total_adjustment += adjustment
+                    elif pricing and pricing.yes_pricing_type in ['fixed_price']:
+                        print("reached herererreeerererererereerererrrrrrrr")
+                        self.bid_in_person=True
+                        
             
             elif question.question_type in ['describe', 'quantity']:
                 adjustment = self._calculate_options_question_adjustment_from_stored(
@@ -634,13 +647,17 @@ class SubmitServiceResponsesView(APIView):
                     pricing = QuestionPricing.objects.filter(
                         question=question, package=package
                     ).first()
-                    if pricing and pricing.yes_pricing_type not in ['ignore', 'bid_in_person']:
+                    if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                         adjustment = self._apply_pricing_rule(
                             pricing.yes_pricing_type, pricing.yes_value,
                             pricing.value_type, base_sqft_price
                         )
                         print(f"[DEBUG] Conditional question {question.id} adjustment for package {package.id}: {adjustment}")
                         total_adjustment += adjustment
+
+                    elif pricing and pricing.yes_pricing_type in ['fixed_price']:
+                        print("reached herererreeerererererereerererrrrrrrr122")
+                        self.bid_in_person=True
         
         print(f"[DEBUG] Total adjustment for package {package.id} ({package.name}): {total_adjustment}")
         return total_adjustment

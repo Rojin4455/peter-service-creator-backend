@@ -209,7 +209,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             # Customer info
             'first_name', 'last_name', 'company_name',
             'customer_email', 'customer_phone', 'postal_code',
-            'allow_sms', 'allow_email',
+            'allow_sms', 'allow_email','is_bid_in_person',
 
             # Address info
             'street_address', 'location', 'location_details',

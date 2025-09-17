@@ -53,9 +53,10 @@ class CustomerSubmission(models.Model):
     actual_sqft = models.PositiveIntegerField(null=True, blank=True)
 
     # Submission details
+
     selected_services = models.ManyToManyField(Service, through="CustomerServiceSelection")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
-
+    is_bid_in_person = models.BooleanField(default=False)
     # Pricing
     total_base_price = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     total_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
