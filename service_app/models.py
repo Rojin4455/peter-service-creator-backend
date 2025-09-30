@@ -49,6 +49,9 @@ class Service(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    is_commercial = models.BooleanField(default=True)
+    is_residential = models.BooleanField(default=True)
+    is_enable_dollar_minimum = models.BooleanField(default=False)
     image = models.ImageField(upload_to="services/", blank=True, null=True)  # ✅ added field
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

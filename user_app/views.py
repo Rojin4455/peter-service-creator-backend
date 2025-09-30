@@ -43,10 +43,23 @@ class ContactCreateUpdateView(generics.RetrieveUpdateAPIView):
 # Step 2: List All Services
 class ServiceListView(generics.ListAPIView):
     """List all active services"""
-    queryset = Service.objects.filter(is_active=True)
     serializer_class = ServiceListSerializer
     permission_classes = [AllowAny]
 
+    def get_queryset(self):
+        queryset = Service.objects.filter(is_active=True)
+
+        # 🔎 Boolean filters
+        is_commercial = self.request.query_params.get("is_commercial")
+        is_residential = self.request.query_params.get("is_residential")
+
+        if is_commercial is not None:
+            queryset = queryset.filter(is_commercial=is_commercial.lower() == "true")
+
+        if is_residential is not None:
+            queryset = queryset.filter(is_residential=is_residential.lower() == "true")
+
+        return queryset.order_by("order", "name")
 
 # Step 3: Get Service Details with Packages
 class ServiceDetailView(generics.RetrieveAPIView):
