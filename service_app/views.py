@@ -260,12 +260,18 @@ class PackageFeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminPermission]
 
 
+from rest_framework.parsers import MultiPartParser, FormParser
+
+
 # Question Views
 class QuestionListCreateView(generics.ListCreateAPIView):
     """List all questions and create new ones"""
     permission_classes = [IsAdminPermission]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
+
+        print("hererewerewrwerew")
         queryset = Question.objects.filter(is_active=True).select_related(
             'service', 'parent_question', 'condition_option'
         ).prefetch_related(
@@ -293,6 +299,10 @@ class QuestionListCreateView(generics.ListCreateAPIView):
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
+
+
+            print("post request", self.request.data)
+            print("post request", self.request.FILES)
             return QuestionCreateSerializer
         return QuestionSerializer
 

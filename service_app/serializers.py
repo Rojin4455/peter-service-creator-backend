@@ -211,7 +211,7 @@ class QuestionOptionSerializer(serializers.ModelSerializer):
         model = QuestionOption
         fields = [
             'id', 'option_text', 'order', 'is_active', 'created_at', 'question',
-            'allow_quantity', 'max_quantity', 'pricing_rules'
+            'allow_quantity', 'max_quantity', 'pricing_rules','image'
         ]
         extra_kwargs = {
             'question': {'required': False}
@@ -243,7 +243,7 @@ class SubQuestionSerializer(serializers.ModelSerializer):
         model = SubQuestion
         fields = [
             'id', 'parent_question', 'sub_question_text', 'order', 
-            'is_active', 'created_at', 'pricing_rules'
+            'is_active', 'created_at', 'pricing_rules','image'
         ]
         extra_kwargs = {
             'parent_question': {'required': False}
@@ -252,7 +252,6 @@ class SubQuestionSerializer(serializers.ModelSerializer):
 
     def get_pricing_rules(self, obj):
         return SubQuestionPricingSerializer(obj.pricing_rules, many=True).data
-
 
 
 
@@ -389,13 +388,14 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating questions with nested data"""
     options = QuestionOptionSerializer(many=True, required=False)
     sub_questions = SubQuestionSerializer(many=True, required=False)
+    image = serializers.ImageField(required=False, allow_null=True)
     
     class Meta:
         model = Question
         fields = [
             'service', 'parent_question', 'condition_answer', 'condition_option',
             'question_text', 'question_type', 'order', 'is_active', 
-            'options', 'sub_questions',"id",
+            'options', 'sub_questions',"id",'image'
         ]
 
     def validate(self, data):
@@ -426,8 +426,10 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
+        print("validated_data: ",validated_data)
         options_data = validated_data.pop('options', [])
         sub_questions_data = validated_data.pop('sub_questions', [])
+
         
         question = Question.objects.create(**validated_data)
         

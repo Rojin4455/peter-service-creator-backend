@@ -166,6 +166,7 @@ class Question(models.Model):
                                        help_text="Option that triggers this conditional question")
     
     question_text = models.TextField()
+    image = models.ImageField(upload_to="questions/", blank=True, null=True) 
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPES)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
@@ -206,6 +207,8 @@ class QuestionOption(models.Model):
                                        help_text="Allow quantity input for this option")
     max_quantity = models.PositiveIntegerField(default=1, 
                                              help_text="Maximum allowed quantity")
+    image = models.ImageField(upload_to="question_option/", blank=True, null=True) 
+
     
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -270,6 +273,7 @@ class SubQuestion(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     parent_question = models.ForeignKey(Question, related_name='sub_questions', on_delete=models.CASCADE)
     sub_question_text = models.TextField()
+    image = models.ImageField(upload_to="subquestion/", blank=True, null=True) 
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
