@@ -300,7 +300,7 @@ class QuestionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'service', 'service_name', 'parent_question', 'parent_question_text',
             'condition_answer', 'condition_option', 'condition_option_text',
-            'question_text', 'question_type', 'order', 'is_active', 
+            'question_text', 'question_type', 'order', 'is_active','image',
             'created_at', 'updated_at', 'options', 'sub_questions', 
             'child_questions', 'pricing_rules', 'is_conditional', 'is_parent'
         ]
@@ -350,7 +350,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         model = Service
         fields = [
             'id', 'name', 'description', 'is_active', 'order',
-            'created_at', 'updated_at', 'created_by', 'created_by_name',
+            'created_at', 'updated_at', 'created_by', 'created_by_name','image',
             'questions' ,'packages', 'features','settings','is_commercial','is_residential','is_enable_dollar_minimum'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
