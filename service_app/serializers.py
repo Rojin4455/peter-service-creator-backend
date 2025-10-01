@@ -6,7 +6,7 @@ from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
     Order, OrderQuestionAnswer,ServiceSettings, QuestionResponse, SubQuestion, SubQuestionPricing, SubQuestionResponse,
-    OptionResponse,AddOnService,QuantityDiscount
+    OptionResponse,AddOnService,QuantityDiscount,Coupon
 )
 
 
@@ -751,3 +751,11 @@ class ServiceSizePackageSerializer(serializers.ModelSerializer):
         ).select_related('service_package')
 
         return ServicePackagePriceSerializer(mappings, many=True).data
+    
+
+
+
+class CouponSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Coupon
+        fields = "__all__"

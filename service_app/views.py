@@ -21,7 +21,8 @@ from rest_framework.permissions import IsAuthenticated
 from .models import (
     User, Location, Service, Package, Feature, PackageFeature,
     Question, QuestionOption, QuestionPricing, OptionPricing,
-    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse,AddOnService,QuantityDiscount
+    Order, OrderQuestionAnswer,SubQuestionPricing,SubQuestion,QuestionResponse,AddOnService,QuantityDiscount,
+    GlobalSizePackage, ServicePackageSizeMapping,PropertyType, Coupon
 )
 from .serializers import (
     UserSerializer, LoginSerializer, LocationSerializer, ServiceSerializer,
@@ -30,7 +31,8 @@ from .serializers import (
     QuestionOptionSerializer, QuestionPricingSerializer, OptionPricingSerializer,
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
     ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
-    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer,ServicePackageSizeMappingNewSerializer
+    PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer,ServicePackageSizeMappingNewSerializer,
+    GlobalSizePackageSerializer,ServicePackageSizeMappingSerializer,PropertyTypeSerializer, CouponSerializer
 )
 
 
@@ -38,9 +40,10 @@ from .serializers import (
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAdminUser, AllowAny
-from rest_framework.views import APIView
 
-from rest_framework.decorators import api_view
+
+
+from rest_framework.generics import ListAPIView
 
 
 
@@ -962,9 +965,6 @@ class GlobalSizePackageDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 
-from .serializers import GlobalSizePackageSerializer, ServicePackageSizeMappingSerializer,PropertyTypeSerializer
-from .models import GlobalSizePackage, ServicePackageSizeMapping,PropertyType
-from rest_framework.generics import ListAPIView
 
 
 class PropertyTypeListCreateView(generics.ListCreateAPIView):
@@ -1240,3 +1240,13 @@ class ServiceMappedSizesStructuredAPIView(generics.ListAPIView):
         context = super().get_serializer_context()
         context['service_id'] = self.kwargs['service_id']
         return context
+    
+
+
+
+
+
+class CouponViewSet(viewsets.ModelViewSet):
+    queryset = Coupon.objects.all().order_by("-created_at")
+    serializer_class = CouponSerializer
+    permission_classes = [permissions.IsAdminUser] 

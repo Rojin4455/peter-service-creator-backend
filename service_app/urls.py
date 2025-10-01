@@ -5,6 +5,8 @@ from . import views
 
 router = DefaultRouter()
 router.register(r'quantity-discounts', views.QuantityDiscountViewSet, basename='quantity-discount')
+router.register(r'coupons', views.CouponViewSet, basename="coupon")
+
 
 # Complete Admin API URLs
 urlpatterns = [
