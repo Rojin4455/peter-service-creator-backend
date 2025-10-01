@@ -270,7 +270,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 class QuestionListCreateView(generics.ListCreateAPIView):
     """List all questions and create new ones"""
     permission_classes = [IsAdminPermission]
-    parser_classes = [MultiPartParser, FormParser]
+    # parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
 
@@ -1249,4 +1249,4 @@ class ServiceMappedSizesStructuredAPIView(generics.ListAPIView):
 class CouponViewSet(viewsets.ModelViewSet):
     queryset = Coupon.objects.all().order_by("-created_at")
     serializer_class = CouponSerializer
-    permission_classes = [permissions.IsAdminUser] 
+    permission_classes = [permissions.IsAdminUser]

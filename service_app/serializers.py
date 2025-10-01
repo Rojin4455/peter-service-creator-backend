@@ -388,7 +388,7 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating questions with nested data"""
     options = QuestionOptionSerializer(many=True, required=False)
     sub_questions = SubQuestionSerializer(many=True, required=False)
-    image = serializers.ImageField(required=False, allow_null=True)
+    # image = serializers.ImageField(required=False, allow_null=True)
     
     class Meta:
         model = Question
@@ -399,21 +399,21 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         ]
 
 
-    def to_internal_value(self, data):
-        # handle options & sub_questions if they come as JSON strings
-        import json
-        data = data.copy()
-        if isinstance(data.get('options'), str):
-            try:
-                data['options'] = json.loads(data['options'])
-            except Exception:
-                raise serializers.ValidationError({"options": "Invalid JSON format"})
-        if isinstance(data.get('sub_questions'), str):
-            try:
-                data['sub_questions'] = json.loads(data['sub_questions'])
-            except Exception:
-                raise serializers.ValidationError({"sub_questions": "Invalid JSON format"})
-        return super().to_internal_value(data)
+    # def to_internal_value(self, data):
+    #     # handle options & sub_questions if they come as JSON strings
+    #     import json
+    #     data = data.copy()
+    #     if isinstance(data.get('options'), str):
+    #         try:
+    #             data['options'] = json.loads(data['options'])
+    #         except Exception:
+    #             raise serializers.ValidationError({"options": "Invalid JSON format"})
+    #     if isinstance(data.get('sub_questions'), str):
+    #         try:
+    #             data['sub_questions'] = json.loads(data['sub_questions'])
+    #         except Exception:
+    #             raise serializers.ValidationError({"sub_questions": "Invalid JSON format"})
+    #     return super().to_internal_value(data)
 
     def validate(self, data):
         question_type = data.get('question_type') or getattr(self.instance, "question_type", None)
