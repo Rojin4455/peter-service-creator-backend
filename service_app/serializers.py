@@ -399,29 +399,33 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, data):
-        """Validate question data based on type"""
-        question_type = data.get('question_type')
-        options = data.get('options', [])
-        sub_questions = data.get('sub_questions', [])
-        parent_question = data.get('parent_question')
-        condition_answer = data.get('condition_answer')
+        question_type = data.get('question_type') or getattr(self.instance, "question_type", None)
+        options = data.get('options', None)
+        sub_questions = data.get('sub_questions', None)
+        parent_question = data.get('parent_question') or getattr(self.instance, "parent_question", None)
+        condition_answer = data.get('condition_answer') or getattr(self.instance, "condition_answer", None)
 
-        # Validate conditional questions
+        # Conditional questions
         if parent_question and not condition_answer:
             raise serializers.ValidationError(
                 "Conditional questions must have a condition_answer"
             )
 
         # Validate question type requirements
-        if question_type in ['describe', 'quantity'] and not options:
-            raise serializers.ValidationError(
-                f"{question_type} questions must have options"
-            )
-        
-        if question_type == 'multiple_yes_no' and not sub_questions:
-            raise serializers.ValidationError(
-                "multiple_yes_no questions must have sub_questions"
-            )
+        if question_type in ['describe', 'quantity']:
+            # Check both incoming data and existing DB options
+            existing_options = self.instance.options.exists() if self.instance else False
+            if options is None and not existing_options:  # only fail if neither exists
+                raise serializers.ValidationError(
+                    f"{question_type} questions must have options"
+                )
+
+        if question_type == 'multiple_yes_no':
+            existing_subs = self.instance.sub_questions.exists() if self.instance else False
+            if sub_questions is None and not existing_subs:
+                raise serializers.ValidationError(
+                    "multiple_yes_no questions must have sub_questions"
+                )
 
         return data
 
