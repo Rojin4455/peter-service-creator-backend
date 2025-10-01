@@ -5,6 +5,8 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
 import uuid
 
+from django.utils import timezone
+
 
 class User(AbstractUser):
     """Extended User model for admin authentication"""
@@ -634,3 +636,54 @@ class AddOnService(models.Model):
 
     def __str__(self):
         return self.name
+    
+
+
+
+
+
+class Coupon(models.Model):
+    DISCOUNT_TYPES = (
+        ('percentage', 'Percentage'),
+        ('fixed', 'Fixed Amount'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPES, default='percentage')
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2, help_text="Percentage (0-100) or fixed amount")
+    expiration_date = models.DateTimeField(null=True, blank=True)
+    used_count = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "coupons"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.code} ({self.discount_type} - {self.discount_value})"
+
+    def is_valid(self):
+        """Check if coupon is valid"""
+        if not self.is_active:
+            return False
+        if self.expiration_date and self.expiration_date < timezone.now():
+            return False
+        # if self.usage_limit and self.used_count >= self.usage_limit:
+        #     return False
+        return True
+
+    def apply_discount(self, amount):
+        """Return discounted amount given original amount"""
+        if not self.is_valid():
+            return amount
+
+        if self.discount_type == 'percentage':
+            discount = (amount * self.discount_value) / 100
+        else:  # fixed amount
+            discount = self.discount_value
+
+        return max(amount - discount, 0)

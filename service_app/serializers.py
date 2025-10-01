@@ -308,7 +308,7 @@ class QuestionSerializer(serializers.ModelSerializer):
 
     def get_child_questions(self, obj):
         """Get child questions recursively"""
-        child_questions = obj.child_questions.filter(is_active=True).order_by('order')
+        child_questions = obj.child_questions.all().order_by('order')
         return QuestionSerializer(child_questions, many=True, context=self.context).data
 
     def get_pricing_rules(self, obj):
@@ -397,6 +397,23 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
             'question_text', 'question_type', 'order', 'is_active', 
             'options', 'sub_questions',"id",'image'
         ]
+
+
+    def to_internal_value(self, data):
+        # handle options & sub_questions if they come as JSON strings
+        import json
+        data = data.copy()
+        if isinstance(data.get('options'), str):
+            try:
+                data['options'] = json.loads(data['options'])
+            except Exception:
+                raise serializers.ValidationError({"options": "Invalid JSON format"})
+        if isinstance(data.get('sub_questions'), str):
+            try:
+                data['sub_questions'] = json.loads(data['sub_questions'])
+            except Exception:
+                raise serializers.ValidationError({"sub_questions": "Invalid JSON format"})
+        return super().to_internal_value(data)
 
     def validate(self, data):
         question_type = data.get('question_type') or getattr(self.instance, "question_type", None)
