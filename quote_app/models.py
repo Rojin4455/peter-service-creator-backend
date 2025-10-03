@@ -2,7 +2,7 @@
 from django.db import models
 from decimal import Decimal
 import uuid
-from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService
+from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService, Coupon
 
 class CustomerSubmission(models.Model):
     """Main customer submission model (revamped)"""
@@ -69,7 +69,14 @@ class CustomerSubmission(models.Model):
     addons = models.ManyToManyField(AddOnService, blank=True, related_name="submissions")
     total_addons_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
-
+    applied_coupon = models.ForeignKey(
+        Coupon,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="submissions"
+    )
+    is_coupon_applied = models.BooleanField(default=False)
     
 
     # Timestamps

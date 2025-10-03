@@ -238,6 +238,10 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
 
             # Relations
             'service_selections',
+
+            #coupon
+            'applied_coupon',
+            'is_coupon_applied'
         ]
 
     def get_service_selections(self, obj):

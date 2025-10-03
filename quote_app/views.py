@@ -985,11 +985,21 @@ class SubmitFinalQuoteView(APIView):
                 print(f"[DEBUG] Add-on {addon.name}: price={addon.base_price}")
         
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
+
         
         # Final total includes base price + sqft price + adjustments + surcharges + add-ons
         final_total = total_base_price + total_sqft_price + total_adjustments + submission.total_surcharges + total_addons_price
         
         print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + surcharges={submission.total_surcharges} + addons={total_addons_price} = {final_total}")
+
+
+        if submission.applied_coupon and submission.applied_coupon.is_valid():
+            final_total = submission.applied_coupon.apply_discount(final_total)
+            submission.is_coupon_applied = True
+            print(f"[DEBUG] Coupon {submission.applied_coupon.code} applied: new total = {final_total}")
+        else:
+            submission.is_coupon_applied = False
+            print("[DEBUG] No valid coupon applied")
         
         # Update submission totals
         submission.total_base_price = total_base_price + total_sqft_price  # Combined base and sqft
@@ -1254,29 +1264,45 @@ class CouponDetailView(APIView):
 
         serializer = CouponSerializer(coupon)
         return Response(serializer.data)
+    
 
-# Check & apply coupon to an amount
+
+
 class ApplyCouponView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         code = request.data.get("code")
         amount = request.data.get("amount")
+        submission_id = request.data.get("submission_id")
 
-        if not code or amount is None:
-            return Response({"detail": "Code and amount are required"}, status=400)
+        if not code or amount is None or not submission_id:
+            return Response({"detail": "Code, amount, and submission_id are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = Decimal(amount)
+        except Exception:
+            return Response({"detail": "Invalid amount"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             coupon = Coupon.objects.get(code=code, is_active=True)
         except Coupon.DoesNotExist:
-            return Response({"detail": "Invalid coupon"}, status=404)
+            return Response({"detail": "Invalid coupon"}, status=status.HTTP_404_NOT_FOUND)
 
         if not coupon.is_valid():
-            return Response({"detail": "Coupon is expired or inactive"}, status=400)
+            return Response({"detail": "Coupon is expired or inactive"}, status=status.HTTP_400_BAD_REQUEST)
 
         discounted_amount = coupon.apply_discount(amount)
+
+        # Attach coupon to submission
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        submission.applied_coupon = coupon
+        submission.is_coupon_applied = True
+        submission.save(update_fields=["applied_coupon", "is_coupon_applied", "updated_at"])
+
         return Response({
-            "original_amount": amount,
-            "discounted_amount": discounted_amount,
-            "coupon": CouponSerializer(coupon).data
-        })
+            "original_amount": str(amount),
+            "discounted_amount": str(discounted_amount),
+            "coupon": CouponSerializer(coupon).data,
+            "submission_id": str(submission.id)
+        }, status=status.HTTP_200_OK)
