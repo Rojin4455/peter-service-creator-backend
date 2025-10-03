@@ -14,7 +14,7 @@ from service_app.models import ServiceSettings
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location,
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService,Coupon
 )
 from django.db.models import Sum
 from .models import (
@@ -23,13 +23,14 @@ from .models import (
 )
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
-    QuestionPublicSerializer, GlobalSizePackagePublicSerializer,
+    QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
 
 from service_app.serializers import GlobalSizePackageSerializer
+
 
 from quote_app.helpers import create_or_update_ghl_contact
 
@@ -1230,3 +1231,52 @@ class DeclineSubmissionView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+
+
+
+# List all active & valid coupons
+class CouponListView(generics.ListAPIView):
+    queryset = Coupon.objects.filter(is_active=True)
+    serializer_class = CouponSerializer
+    permission_classes = [AllowAny]
+
+# Get details of a single coupon by code
+class CouponDetailView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, code):
+        try:
+            coupon = Coupon.objects.get(code=code, is_active=True)
+        except Coupon.DoesNotExist:
+            return Response({"detail": "Coupon not found"}, status=404)
+
+        serializer = CouponSerializer(coupon)
+        return Response(serializer.data)
+
+# Check & apply coupon to an amount
+class ApplyCouponView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        code = request.data.get("code")
+        amount = request.data.get("amount")
+
+        if not code or amount is None:
+            return Response({"detail": "Code and amount are required"}, status=400)
+
+        try:
+            coupon = Coupon.objects.get(code=code, is_active=True)
+        except Coupon.DoesNotExist:
+            return Response({"detail": "Invalid coupon"}, status=404)
+
+        if not coupon.is_valid():
+            return Response({"detail": "Coupon is expired or inactive"}, status=400)
+
+        discounted_amount = coupon.apply_discount(amount)
+        return Response({
+            "original_amount": amount,
+            "discounted_amount": discounted_amount,
+            "coupon": CouponSerializer(coupon).data
+        })

@@ -46,4 +46,11 @@ urlpatterns = [
         views.DeclineSubmissionView.as_view(),
         name="decline-submission",
     ),
+
+
+
+
+    path("coupons/", views.CouponListView.as_view(), name="coupon-list"),
+    path("coupons/<str:code>/", views.CouponDetailView.as_view(), name="coupon-detail"),
+    path("coupons/apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
 ]

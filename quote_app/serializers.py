@@ -4,7 +4,7 @@ from decimal import Decimal
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location, 
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing, AddOnService
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing, AddOnService,Coupon
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
@@ -50,13 +50,13 @@ class QuestionOptionPublicSerializer(serializers.ModelSerializer):
     """Public serializer for question options"""
     class Meta:
         model = QuestionOption
-        fields = ['id', 'option_text', 'order', 'allow_quantity', 'max_quantity']
+        fields = ['id', 'option_text', 'order', 'allow_quantity', 'max_quantity','image']
 
 class SubQuestionPublicSerializer(serializers.ModelSerializer):
     """Public serializer for sub-questions"""
     class Meta:
         model = SubQuestion
-        fields = ['id', 'sub_question_text', 'order']
+        fields = ['id', 'sub_question_text', 'order','image']
 
 class QuestionPublicSerializer(serializers.ModelSerializer):
     """Public serializer for questions"""
@@ -69,7 +69,7 @@ class QuestionPublicSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'question_text', 'question_type', 'order',
             'parent_question', 'condition_answer', 'condition_option',
-            'options', 'sub_questions', 'child_questions'
+            'options', 'sub_questions', 'child_questions','image'
         ]
     
     def get_child_questions(self, obj):
@@ -450,3 +450,29 @@ class SubmitFinalQuoteSerializer(serializers.Serializer):
 
 
 
+
+
+
+
+class CouponSerializer(serializers.ModelSerializer):
+    is_valid = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Coupon
+        fields = [
+            "id", "code", "discount_type", "discount_value",
+            "expiration_date", "used_count", "is_active",
+            "is_valid", "created_at", "updated_at"
+        ]
+
+    def get_is_valid(self, obj):
+        return obj.is_valid()
+    
+
+
+class SubmissionCouponSerializer(serializers.ModelSerializer):
+    applied_coupon = CouponSerializer()
+
+    class Meta:
+        model = CustomerSubmission
+        fields = ["id", "final_total", "discounted_total", "applied_coupon"]
