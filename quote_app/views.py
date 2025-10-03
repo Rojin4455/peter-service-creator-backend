@@ -1297,11 +1297,12 @@ class ApplyCouponView(APIView):
             return Response({"detail": "Coupon is expired or inactive"}, status=status.HTTP_400_BAD_REQUEST)
 
         discounted_amount = coupon.apply_discount(amount)
+        discounted_actual_amount = coupon.get_discount_amount(amount)
 
         # Attach coupon to submission
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         submission.applied_coupon = coupon
-        submission.discounted_amount = discounted_amount
+        submission.discounted_amount = discounted_actual_amount
         submission.is_coupon_applied = True
         submission.save(update_fields=["applied_coupon", "is_coupon_applied", "updated_at", "discounted_amount"])
 

@@ -687,3 +687,17 @@ class Coupon(models.Model):
             discount = self.discount_value
 
         return max(amount - discount, 0)
+    
+
+    def get_discount_amount(self, amount):
+        """Return only the discount amount (not the final price)."""
+        if not self.is_valid():
+            return Decimal('0.00')
+
+        if self.discount_type == 'percentage':
+            discount = (amount * self.discount_value) / 100
+        else:  # fixed amount
+            discount = self.discount_value
+
+        # Ensure discount never exceeds original amount
+        return min(discount, amount)
