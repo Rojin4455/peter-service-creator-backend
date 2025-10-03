@@ -358,7 +358,6 @@ class ServiceSerializer(serializers.ModelSerializer):
     def get_questions(self, obj):
         """Get only root questions (non-conditional ones)"""
         root_questions = obj.questions.filter(
-            is_active=True, 
             parent_question__isnull=True
         ).order_by('order')
         return QuestionSerializer(root_questions, many=True, context=self.context).data
