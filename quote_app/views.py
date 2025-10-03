@@ -894,6 +894,10 @@ class SubmitFinalQuoteView(APIView):
                     'signature': serializer.validated_data.get('signature', ""),
                     'submitted_at': timezone.now().isoformat()
                 }
+
+                if not serializer.validated_data.get('coupon_id', ''):
+                    submission.is_coupon_applied=False
+                    submission.applied_coupon=None
                 
                 submission.additional_data = additional_data
                 submission.save()
