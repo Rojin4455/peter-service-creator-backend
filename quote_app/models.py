@@ -77,6 +77,7 @@ class CustomerSubmission(models.Model):
         related_name="submissions"
     )
     is_coupon_applied = models.BooleanField(default=False)
+    discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     
 
     # Timestamps

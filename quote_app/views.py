@@ -1301,8 +1301,9 @@ class ApplyCouponView(APIView):
         # Attach coupon to submission
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         submission.applied_coupon = coupon
+        submission.discounted_amount = discounted_amount
         submission.is_coupon_applied = True
-        submission.save(update_fields=["applied_coupon", "is_coupon_applied", "updated_at"])
+        submission.save(update_fields=["applied_coupon", "is_coupon_applied", "updated_at", "discounted_amount"])
 
         return Response({
             "original_amount": str(amount),

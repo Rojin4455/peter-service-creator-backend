@@ -243,7 +243,8 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
 
             #coupon
             'applied_coupon',
-            'is_coupon_applied'
+            'is_coupon_applied',
+            'discounted_amount'
         ]
 
     def get_service_selections(self, obj):
