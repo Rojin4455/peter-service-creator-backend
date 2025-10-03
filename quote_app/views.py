@@ -115,6 +115,7 @@ class ServiceQuestionsView(APIView):
         # Get root questions (no parent)
         root_questions = Question.objects.filter(
             service=service,
+            is_active=True,
             parent_question__isnull=True
         ).prefetch_related(
             'options',

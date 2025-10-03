@@ -275,7 +275,7 @@ class QuestionListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
 
         print("hererewerewrwerew")
-        queryset = Question.objects.filter(is_active=True).select_related(
+        queryset = Question.objects.all().select_related(
             'service', 'parent_question', 'condition_option'
         ).prefetch_related(
             'options__pricing_rules',
