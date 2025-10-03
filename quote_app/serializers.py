@@ -11,7 +11,7 @@ from .models import (
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
 )
 
-from service_app.serializers import ServiceSettingsSerializer
+from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
 
 class LocationPublicSerializer(serializers.ModelSerializer):
     """Public serializer for locations"""
@@ -200,7 +200,9 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
-    addons = AddOnServiceSerializer(many=True, read_only=True) 
+    addons = AddOnServiceSerializer(many=True, read_only=True)
+    applied_coupon = CouponSerializer(read_only=True)
+    
 
     class Meta:
         model = CustomerSubmission
