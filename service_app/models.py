@@ -6,7 +6,14 @@ from decimal import Decimal
 import uuid
 
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 
+
+
+def validate_image_or_svg(value):
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.svg']
+    if not any(value.name.lower().endswith(ext) for ext in valid_extensions):
+        raise ValidationError('Only image files (.jpg, .jpeg, .png, .gif, .svg) are allowed.')
 
 class User(AbstractUser):
     """Extended User model for admin authentication"""
@@ -168,7 +175,8 @@ class Question(models.Model):
                                        help_text="Option that triggers this conditional question")
     
     question_text = models.TextField()
-    image = models.ImageField(upload_to="questions/", blank=True, null=True) 
+    # image = models.ImageField(upload_to="questions/", blank=True, null=True) 
+    image = models.FileField(upload_to="questions/", blank=True, null=True, validators=[validate_image_or_svg])
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPES)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
@@ -209,7 +217,9 @@ class QuestionOption(models.Model):
                                        help_text="Allow quantity input for this option")
     max_quantity = models.PositiveIntegerField(default=1, 
                                              help_text="Maximum allowed quantity")
-    image = models.ImageField(upload_to="question_option/", blank=True, null=True) 
+    # image = models.ImageField(upload_to="question_option/", blank=True, null=True) 
+    image = models.FileField(upload_to="question_option/", blank=True, null=True, validators=[validate_image_or_svg])
+
 
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -275,7 +285,8 @@ class SubQuestion(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     parent_question = models.ForeignKey(Question, related_name='sub_questions', on_delete=models.CASCADE)
     sub_question_text = models.TextField()
-    image = models.ImageField(upload_to="subquestion/", blank=True, null=True) 
+    # image = models.ImageField(upload_to="subquestion/", blank=True, null=True) 
+    image = models.FileField(upload_to="subquestion/", blank=True, null=True, validators=[validate_image_or_svg])
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
