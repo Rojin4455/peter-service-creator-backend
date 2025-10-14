@@ -66,18 +66,31 @@ class CustomerSubmission(models.Model):
 
     additional_data = models.JSONField(default=dict, null=True, blank=True)
 
-    addons = models.ManyToManyField(AddOnService, blank=True, related_name="submissions")
+    # # addons = models.ManyToManyField(AddOnService, blank=True, related_name="submissions")
+    # old_addons = models.ManyToManyField(
+    #     AddOnService,
+    #     blank=True,
+    #     related_name="old_submissions"
+    # )
+
+    # # ✅ New through model relationship
+    addons = models.ManyToManyField(
+        AddOnService,
+        through="SubmissionAddOn",
+        related_name="submissions",
+        blank=True
+    )
     total_addons_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
-    applied_coupon = models.ForeignKey(
-        Coupon,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="submissions"
-    )
-    is_coupon_applied = models.BooleanField(default=False)
-    discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    # applied_coupon = models.ForeignKey(
+    #     Coupon,
+    #     on_delete=models.SET_NULL,
+    #     null=True,
+    #     blank=True,
+    #     related_name="submissions"
+    # )
+    # is_coupon_applied = models.BooleanField(default=False)
+    # discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     
 
     # Timestamps
@@ -91,6 +104,33 @@ class CustomerSubmission(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} - {self.customer_email}"
+    
+
+
+
+class SubmissionAddOn(models.Model):
+    submission = models.ForeignKey(
+        CustomerSubmission,
+        on_delete=models.CASCADE,
+        related_name="submission_addons"
+    )
+    addon = models.ForeignKey(
+        AddOnService,
+        on_delete=models.CASCADE,
+        related_name="addon_submissions"
+    )
+    quantity = models.PositiveIntegerField(default=1)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+
+    class Meta:
+        unique_together = ("submission", "addon")
+
+    def save(self, *args, **kwargs):
+        self.subtotal = self.addon.base_price * self.quantity
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.addon.name} x {self.quantity} ({self.submission.id})"
 
 
 class CustomerServiceSelection(models.Model):

@@ -8,7 +8,7 @@ from service_app.models import (
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote,SubmissionAddOn
 )
 
 from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
@@ -194,13 +194,24 @@ class AddOnServiceSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "description", "base_price"]
 
 
+class SubmissionAddOnSerializer(serializers.ModelSerializer):
+    addon_name = serializers.CharField(source="addon.name", read_only=True)
+    addon_price = serializers.DecimalField(source="addon.base_price", max_digits=10, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = SubmissionAddOn
+        fields = ["id", "addon", "addon_name", "addon_price", "quantity", "subtotal"]
+
+
 from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
     service_selections = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
-    addons = AddOnServiceSerializer(many=True, read_only=True)
+    # addons = AddOnServiceSerializer(many=True, read_only=True)
+    addons = SubmissionAddOnSerializer(many=True, read_only=True)
+
     applied_coupon = CouponSerializer(read_only=True)
     
 

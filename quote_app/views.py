@@ -19,13 +19,13 @@ from service_app.models import (
 from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote, SubmissionAddOn
 )
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
-    ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,
+    ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,SubmissionAddOnSerializer,
     ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
 )
 
@@ -982,12 +982,23 @@ class SubmitFinalQuoteView(APIView):
                 
                 print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
         
-        # Calculate add-ons total
-        if submission.addons.exists():
-            for addon in submission.addons.all():
-                total_addons_price += addon.base_price
-                print(f"[DEBUG] Add-on {addon.name}: price={addon.base_price}")
+        # # Calculate add-ons total
+        # if submission.addons.exists():
+        #     for addon in submission.addons.all():
+        #         total_addons_price += addon.base_price
+        #         print(f"[DEBUG] Add-on {addon.name}: price={addon.base_price}")
         
+        # print(f"[DEBUG] Total add-ons price: {total_addons_price}")
+
+        submission_addons = submission.submission_addons.select_related("addon")
+        for sub_addon in submission_addons:
+            subtotal = sub_addon.addon.base_price * sub_addon.quantity
+            total_addons_price += subtotal
+            print(
+                f"[DEBUG] Add-on {sub_addon.addon.name}: base_price={sub_addon.addon.base_price}, "
+                f"quantity={sub_addon.quantity}, subtotal={subtotal}"
+            )
+
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
 
         
@@ -1151,69 +1162,140 @@ class AddOnServiceListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
 
+# class AddAddOnsToSubmissionView(APIView):
+#     permission_classes = [AllowAny]  # ✅ no auth
+
+#     def post(self, request, submission_id):
+#         addon_ids = request.data.get("addon_ids", [])
+#         if not addon_ids:
+#             return Response({"error": "addon_ids list is required"}, status=400)
+
+#         try:
+#             submission = get_object_or_404(CustomerSubmission, id=submission_id)
+#             addons = AddOnService.objects.filter(id__in=addon_ids)
+            
+#             if not addons.exists():
+#                 return Response({"error": "No valid add-ons found"}, status=400)
+
+#             # Attach addons (many-to-many add)
+#             submission.addons.add(*addons)
+
+#             # ✅ Recalculate total_addons_price
+#             total_price = submission.addons.aggregate(
+#                 total=Sum("base_price")
+#             )["total"] or Decimal("0.00")
+#             submission.total_addons_price = total_price
+#             submission.save()
+
+#             return Response({
+#                 "message": "Add-ons added successfully",
+#                 "total_addons_price": str(submission.total_addons_price),
+#                 "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
+#             })
+#         except Exception as e:
+#             return Response({"error": str(e)}, status=400)
+        
+#     def delete(self, request, submission_id):
+#         addon_ids = request.data.get("addon_ids", [])
+#         if not addon_ids:
+#             return Response({"error": "addon_ids list is required"}, status=400)
+
+#         try:
+#             submission = get_object_or_404(CustomerSubmission, id=submission_id)
+#             addons = AddOnService.objects.filter(id__in=addon_ids)
+
+#             if not addons.exists():
+#                 return Response({"error": "No valid add-ons found"}, status=400)
+
+#             # Remove addons (many-to-many remove)
+#             submission.addons.remove(*addons)
+
+#             # ✅ Recalculate total_addons_price
+#             total_price = submission.addons.aggregate(
+#                 total=Sum("base_price")
+#             )["total"] or Decimal("0.00")
+#             submission.total_addons_price = total_price
+#             submission.save()
+
+#             return Response({
+#                 "message": "Add-ons removed successfully",
+#                 "total_addons_price": str(submission.total_addons_price),
+#                 "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
+#             })
+#         except Exception as e:
+#             return Response({"error": str(e)}, status=400)
+        
+
+
 class AddAddOnsToSubmissionView(APIView):
-    permission_classes = [AllowAny]  # ✅ no auth
+    permission_classes = [AllowAny]
 
     def post(self, request, submission_id):
-        addon_ids = request.data.get("addon_ids", [])
-        if not addon_ids:
-            return Response({"error": "addon_ids list is required"}, status=400)
+        """
+        Add or update add-ons with quantity for a submission.
+        Example payload:
+        {
+            "addons": [
+                {"addon_id": "uuid1", "quantity": 2},
+                {"addon_id": "uuid2", "quantity": 1}
+            ]
+        }
+        """
+        addons_data = request.data.get("addons", [])
+        if not addons_data:
+            return Response({"error": "addons list is required"}, status=400)
 
-        try:
-            submission = get_object_or_404(CustomerSubmission, id=submission_id)
-            addons = AddOnService.objects.filter(id__in=addon_ids)
-            
-            if not addons.exists():
-                return Response({"error": "No valid add-ons found"}, status=400)
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
 
-            # Attach addons (many-to-many add)
-            submission.addons.add(*addons)
+        total_addons_price = Decimal("0.00")
 
-            # ✅ Recalculate total_addons_price
-            total_price = submission.addons.aggregate(
-                total=Sum("base_price")
-            )["total"] or Decimal("0.00")
-            submission.total_addons_price = total_price
-            submission.save()
+        for item in addons_data:
+            addon_id = item.get("addon_id")
+            quantity = int(item.get("quantity", 1))
+            addon = get_object_or_404(AddOnService, id=addon_id)
 
-            return Response({
-                "message": "Add-ons added successfully",
-                "total_addons_price": str(submission.total_addons_price),
-                "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
-            })
-        except Exception as e:
-            return Response({"error": str(e)}, status=400)
-        
+            submission_addon, created = SubmissionAddOn.objects.update_or_create(
+                submission=submission,
+                addon=addon,
+                defaults={"quantity": quantity}
+            )
+
+            total_addons_price += addon.base_price * quantity
+
+        # Update submission total
+        submission.total_addons_price = total_addons_price
+        submission.save()
+
+        serializer = SubmissionAddOnSerializer(submission.submission_addons.all(), many=True)
+        return Response({
+            "message": "Add-ons added/updated successfully",
+            "total_addons_price": str(submission.total_addons_price),
+            "addons": serializer.data
+        })
+
     def delete(self, request, submission_id):
         addon_ids = request.data.get("addon_ids", [])
         if not addon_ids:
             return Response({"error": "addon_ids list is required"}, status=400)
 
-        try:
-            submission = get_object_or_404(CustomerSubmission, id=submission_id)
-            addons = AddOnService.objects.filter(id__in=addon_ids)
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
 
-            if not addons.exists():
-                return Response({"error": "No valid add-ons found"}, status=400)
+        SubmissionAddOn.objects.filter(submission=submission, addon_id__in=addon_ids).delete()
 
-            # Remove addons (many-to-many remove)
-            submission.addons.remove(*addons)
+        # Recalculate total
+        total = SubmissionAddOn.objects.filter(submission=submission).aggregate(
+            total=Sum(F("addon__base_price") * F("quantity"))
+        )["total"] or Decimal("0.00")
 
-            # ✅ Recalculate total_addons_price
-            total_price = submission.addons.aggregate(
-                total=Sum("base_price")
-            )["total"] or Decimal("0.00")
-            submission.total_addons_price = total_price
-            submission.save()
+        submission.total_addons_price = total
+        submission.save()
 
-            return Response({
-                "message": "Add-ons removed successfully",
-                "total_addons_price": str(submission.total_addons_price),
-                "addons": AddOnServiceSerializer(submission.addons.all(), many=True).data
-            })
-        except Exception as e:
-            return Response({"error": str(e)}, status=400)
-        
+        serializer = SubmissionAddOnSerializer(submission.submission_addons.all(), many=True)
+        return Response({
+            "message": "Add-ons removed successfully",
+            "total_addons_price": str(submission.total_addons_price),
+            "addons": serializer.data
+        })
 
 
 
