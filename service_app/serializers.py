@@ -754,7 +754,21 @@ class ServiceSizePackageSerializer(serializers.ModelSerializer):
 
 
 
+from rest_framework import serializers
+from .models import Coupon
+
 class CouponSerializer(serializers.ModelSerializer):
     class Meta:
         model = Coupon
-        fields = "__all__"
+        fields = [
+            "id",
+            "code",
+            "percentage_discount",
+            "fixed_discount",
+            "expiration_date",
+            "used_count",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "used_count", "created_at", "updated_at"]

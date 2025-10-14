@@ -1246,7 +1246,35 @@ class ServiceMappedSizesStructuredAPIView(generics.ListAPIView):
 
 
 
+from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
+from .models import Coupon
+from .serializers import CouponSerializer
+from decimal import Decimal
+
 class CouponViewSet(viewsets.ModelViewSet):
     queryset = Coupon.objects.all().order_by("-created_at")
     serializer_class = CouponSerializer
     permission_classes = [permissions.IsAdminUser]
+
+    def create(self, request, *args, **kwargs):
+        """Create a new coupon"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        """Update an existing coupon"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete a coupon"""
+        instance = self.get_object()
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

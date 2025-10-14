@@ -654,15 +654,18 @@ class AddOnService(models.Model):
 
 
 class Coupon(models.Model):
-    DISCOUNT_TYPES = (
-        ('percentage', 'Percentage'),
-        ('fixed', 'Fixed Amount'),
-    )
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=50, unique=True, db_index=True)
-    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPES, default='percentage')
-    discount_value = models.DecimalField(max_digits=10, decimal_places=2, help_text="Percentage (0-100) or fixed amount")
+
+    percentage_discount = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="Percentage discount (0-100)."
+    )
+    fixed_discount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Fixed amount discount."
+    )
+
     expiration_date = models.DateTimeField(null=True, blank=True)
     used_count = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
@@ -675,40 +678,29 @@ class Coupon(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.code} ({self.discount_type} - {self.discount_value})"
+        return f"{self.code} ({self.percentage_discount or 0}% + ${self.fixed_discount or 0})"
 
     def is_valid(self):
-        """Check if coupon is valid"""
         if not self.is_active:
             return False
         if self.expiration_date and self.expiration_date < timezone.now():
             return False
-        # if self.usage_limit and self.used_count >= self.usage_limit:
-        #     return False
         return True
 
-    def apply_discount(self, amount):
-        """Return discounted amount given original amount"""
-        if not self.is_valid():
-            return amount
-
-        if self.discount_type == 'percentage':
-            discount = (amount * self.discount_value) / 100
-        else:  # fixed amount
-            discount = self.discount_value
-
-        return max(amount - discount, 0)
-    
-
     def get_discount_amount(self, amount):
-        """Return only the discount amount (not the final price)."""
         if not self.is_valid():
             return Decimal('0.00')
 
-        if self.discount_type == 'percentage':
-            discount = (amount * self.discount_value) / 100
-        else:  # fixed amount
-            discount = self.discount_value
+        total_discount = Decimal('0.00')
 
-        # Ensure discount never exceeds original amount
-        return min(discount, amount)
+        if self.percentage_discount:
+            total_discount += (amount * self.percentage_discount) / 100
+
+        if self.fixed_discount:
+            total_discount += self.fixed_discount
+
+        return min(total_discount, amount)
+
+    def apply_discount(self, amount):
+        discount = self.get_discount_amount(amount)
+        return max(amount - discount, 0)

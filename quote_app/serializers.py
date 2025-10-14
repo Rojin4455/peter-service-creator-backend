@@ -481,9 +481,16 @@ class CouponSerializer(serializers.ModelSerializer):
     class Meta:
         model = Coupon
         fields = [
-            "id", "code", "discount_type", "discount_value",
-            "expiration_date", "used_count", "is_active",
-            "is_valid", "created_at", "updated_at"
+            "id",
+            "code",
+            "percentage_discount",
+            "fixed_discount",
+            "expiration_date",
+            "used_count",
+            "is_active",
+            "is_valid",
+            "created_at",
+            "updated_at",
         ]
 
     def get_is_valid(self, obj):
