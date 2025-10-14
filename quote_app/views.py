@@ -1226,7 +1226,7 @@ class AddOnServiceListView(generics.ListAPIView):
 #             return Response({"error": str(e)}, status=400)
         
 
-
+from django.db.models import F
 class AddAddOnsToSubmissionView(APIView):
     permission_classes = [AllowAny]
 
