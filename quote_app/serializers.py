@@ -210,7 +210,9 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     service_selections = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
     # addons = AddOnServiceSerializer(many=True, read_only=True)
-    addons = SubmissionAddOnSerializer(many=True, read_only=True)
+    # addons = SubmissionAddOnSerializer(many=True, read_only=True)
+    addons = SubmissionAddOnSerializer(source='submission_addons', many=True, read_only=True)
+
 
     applied_coupon = CouponSerializer(read_only=True)
     
