@@ -82,13 +82,13 @@ class CustomerSubmission(models.Model):
     )
     total_addons_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
-    # applied_coupon = models.ForeignKey(
-    #     Coupon,
-    #     on_delete=models.SET_NULL,
-    #     null=True,
-    #     blank=True,
-    #     related_name="submissions"
-    # )
+    applied_coupon = models.ForeignKey(
+        Coupon,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="submissions"
+    )
     is_coupon_applied = models.BooleanField(default=False)
     discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     
