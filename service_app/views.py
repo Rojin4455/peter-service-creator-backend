@@ -1278,3 +1278,234 @@ class CouponViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+
+
+
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Count, Sum, Q, F
+from django.db.models.functions import TruncMonth, TruncDate
+from decimal import Decimal
+from datetime import datetime, timedelta
+from .serializers import CustomerSubmissionListSerializer
+from quote_app.models import CustomerSubmission
+
+class SubmissionPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class DashboardAPIView(APIView):
+    """
+    Comprehensive dashboard endpoint that returns:
+    - Overall statistics
+    - Heard about us breakdown (pie chart data)
+    - Monthly sales/order trends (bar chart data)
+    - Status distribution
+    - Paginated submissions list
+    """
+
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        # Get query parameters for filtering
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        # Base queryset
+        queryset = CustomerSubmission.objects.all()
+        
+        # Apply date filters if provided
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+                queryset = queryset.filter(created_at__gte=start_date_obj)
+            except ValueError:
+                pass
+        
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+                queryset = queryset.filter(created_at__lte=end_date_obj)
+            except ValueError:
+                pass
+        
+        # 1. OVERALL STATISTICS
+        total_submissions = queryset.count()
+        
+        # Total worth (sum of final_total for submitted status)
+        total_worth = queryset.filter(
+            status='submitted'
+        ).aggregate(
+            total=Sum('final_total')
+        )['total'] or Decimal('0.00')
+        
+        # Average order value
+        avg_order_value = queryset.filter(
+            status='submitted'
+        ).aggregate(
+            avg=Sum('final_total')
+        )['avg'] or Decimal('0.00')
+        
+        if queryset.filter(status='submitted').count() > 0:
+            avg_order_value = avg_order_value / queryset.filter(status='submitted').count()
+        
+        # Status counts
+        status_counts = queryset.values('status').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        # Conversion rate (submitted / total)
+        submitted_count = queryset.filter(status='submitted').count()
+        conversion_rate = (submitted_count / total_submissions * 100) if total_submissions > 0 else 0
+        
+        # 2. HEARD ABOUT US BREAKDOWN (Pie Chart Data)
+        heard_about_data = queryset.exclude(
+            Q(heard_about_us__isnull=True) | Q(heard_about_us='')
+        ).values('heard_about_us').annotate(
+            total_count=Count('id'),
+            submitted_count=Count('id', filter=Q(status='submitted')),
+            draft_count=Count('id', filter=Q(status='draft')),
+            responses_completed_count=Count('id', filter=Q(status='responses_completed')),
+            packages_selected_count=Count('id', filter=Q(status='packages_selected')),
+            declined_count=Count('id', filter=Q(status='declined')),
+            expired_count=Count('id', filter=Q(status='expired')),
+            total_value=Sum('final_total', filter=Q(status='submitted'))
+        ).order_by('-total_count')
+        
+        # Format heard about us data
+        heard_about_chart = []
+        for item in heard_about_data:
+            heard_about_chart.append({
+                'source': item['heard_about_us'],
+                'total': item['total_count'],
+                'submitted': item['submitted_count'],
+                'draft': item['draft_count'],
+                'responses_completed': item['responses_completed_count'],
+                'packages_selected': item['packages_selected_count'],
+                'declined': item['declined_count'],
+                'expired': item['expired_count'],
+                'total_value': float(item['total_value'] or 0)
+            })
+        
+        # 3. MONTHLY SALES/ORDER TRENDS (Bar Chart Data)
+        # Get data for the last 12 months
+        twelve_months_ago = datetime.now() - timedelta(days=365)
+        
+        monthly_data = queryset.filter(
+            created_at__gte=twelve_months_ago
+        ).annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            total_submissions=Count('id'),
+            total_revenue=Sum('final_total', filter=Q(status='submitted')),
+            submitted_orders=Count('id', filter=Q(status='submitted')),
+            draft_orders=Count('id', filter=Q(status='draft')),
+            declined_orders=Count('id', filter=Q(status='declined'))
+        ).order_by('month')
+        
+        # Format monthly data
+        sales_trend_chart = []
+        for item in monthly_data:
+            sales_trend_chart.append({
+                'month': item['month'].strftime('%Y-%m'),
+                'month_name': item['month'].strftime('%B %Y'),
+                'total_submissions': item['total_submissions'],
+                'submitted_orders': item['submitted_orders'],
+                'draft_orders': item['draft_orders'],
+                'declined_orders': item['declined_orders'],
+                'revenue': float(item['total_revenue'] or 0)
+            })
+        
+        # 4. DAILY TRENDS (Last 30 days)
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        
+        daily_data = queryset.filter(
+            created_at__gte=thirty_days_ago
+        ).annotate(
+            day=TruncDate('created_at')
+        ).values('day').annotate(
+            submissions=Count('id'),
+            revenue=Sum('final_total', filter=Q(status='submitted'))
+        ).order_by('day')
+        
+        daily_trend = []
+        for item in daily_data:
+            daily_trend.append({
+                'date': item['day'].strftime('%Y-%m-%d'),
+                'submissions': item['submissions'],
+                'revenue': float(item['revenue'] or 0)
+            })
+        
+        # 5. PROPERTY TYPE BREAKDOWN
+        property_type_data = queryset.exclude(
+            property_type__isnull=True
+        ).values('property_type').annotate(
+            count=Count('id'),
+            revenue=Sum('final_total', filter=Q(status='submitted'))
+        ).order_by('-count')
+        
+        property_type_breakdown = []
+        for item in property_type_data:
+            property_type_breakdown.append({
+                'type': item['property_type'],
+                'count': item['count'],
+                'revenue': float(item['revenue'] or 0)
+            })
+        
+        # 6. RECENT ACTIVITY (Last 5 submissions)
+        recent_submissions = queryset.order_by('-created_at')[:5].values(
+            'id', 'first_name', 'last_name', 'customer_email', 
+            'status', 'final_total', 'created_at'
+        )
+        
+        recent_activity = []
+        for sub in recent_submissions:
+            recent_activity.append({
+                'id': str(sub['id']),
+                'customer_name': f"{sub['first_name'] or ''} {sub['last_name'] or ''}".strip() or 'N/A',
+                'email': sub['customer_email'],
+                'status': sub['status'],
+                'amount': float(sub['final_total']),
+                'created_at': sub['created_at'].isoformat()
+            })
+        
+        # 7. PAGINATED SUBMISSIONS LIST
+        paginator = SubmissionPagination()
+        submissions_queryset = queryset.order_by('-created_at')
+        paginated_submissions = paginator.paginate_queryset(submissions_queryset, request)
+        serializer = CustomerSubmissionListSerializer(paginated_submissions, many=True)
+        
+        # Build response
+        response_data = {
+            'statistics': {
+                'total_submissions': total_submissions,
+                'total_worth': float(total_worth),
+                'average_order_value': float(avg_order_value),
+                'conversion_rate': round(conversion_rate, 2),
+                'submitted_count': submitted_count,
+                'status_breakdown': list(status_counts)
+            },
+            'charts': {
+                'heard_about_us': heard_about_chart,
+                'monthly_sales_trend': sales_trend_chart,
+                'daily_trend': daily_trend,
+                'property_type_breakdown': property_type_breakdown
+            },
+            'recent_activity': recent_activity,
+            'submissions': {
+                'results': serializer.data,
+                'count': paginator.page.paginator.count,
+                'next': paginator.get_next_link(),
+                'previous': paginator.get_previous_link(),
+                'total_pages': paginator.page.paginator.num_pages,
+                'current_page': paginator.page.number
+            }
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+
+

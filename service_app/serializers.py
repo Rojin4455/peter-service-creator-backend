@@ -8,6 +8,7 @@ from .models import (
     Order, OrderQuestionAnswer,ServiceSettings, QuestionResponse, SubQuestion, SubQuestionPricing, SubQuestionResponse,
     OptionResponse,AddOnService,QuantityDiscount,Coupon
 )
+from quote_app.models import CustomerSubmission
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -772,3 +773,29 @@ class CouponSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "used_count", "created_at", "updated_at"]
+
+
+
+
+
+
+class CustomerSubmissionListSerializer(serializers.ModelSerializer):
+    """Serializer for listing customer submissions"""
+    customer_name = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    property_type_display = serializers.CharField(source='get_property_type_display', read_only=True)
+    
+    class Meta:
+        model = CustomerSubmission
+        fields = [
+            'id', 'customer_name', 'first_name', 'last_name', 
+            'customer_email', 'customer_phone', 'company_name',
+            'status', 'status_display', 'property_type', 'property_type_display',
+            'final_total', 'total_base_price', 'total_addons_price',
+            'discounted_amount', 'is_coupon_applied',
+            'created_at', 'updated_at', 'expires_at'
+        ]
+    
+    def get_customer_name(self, obj):
+        full_name = f"{obj.first_name or ''} {obj.last_name or ''}".strip()
+        return full_name if full_name else 'N/A'

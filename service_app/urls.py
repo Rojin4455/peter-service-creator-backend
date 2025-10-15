@@ -140,4 +140,7 @@ urlpatterns = [
     ),
 
 
+
+    path('dashboard/', views.DashboardAPIView.as_view(), name='dashboard-api'),
+
 ]+ router.urls
