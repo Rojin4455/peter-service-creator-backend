@@ -262,7 +262,9 @@ class SubmitServiceResponsesView(APIView):
                 submission.is_bid_in_person = self.bid_in_person
                 submission.save()
                 print("submission.total_surcharges",submission.total_surcharges)
-                create_or_update_ghl_contact(submission)
+
+                if not submission.is_on_the_go:
+                    create_or_update_ghl_contact(submission)
                 
                 return Response({
                     'message': 'Responses submitted successfully',
@@ -907,7 +909,9 @@ class SubmitFinalQuoteView(APIView):
                     self._calculate_final_totals_new(submission)
                     
                 # Send notifications, create orders, etc.
-                create_or_update_ghl_contact(submission, is_submit=True)
+
+                if not submission.is_on_the_go:
+                    create_or_update_ghl_contact(submission, is_submit=True)
                 
                 return Response({
                     'message': 'Quote submitted successfully',

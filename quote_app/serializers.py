@@ -95,7 +95,7 @@ class CustomerSubmissionCreateSerializer(serializers.ModelSerializer):
             "street_address", "location",
             "heard_about_us",
             "property_type", "property_name", "num_floors", "is_previous_customer",
-            "size_range", "actual_sqft",
+            "size_range", "actual_sqft","is_on_the_go"
         ]
 
     def create(self, validated_data):
