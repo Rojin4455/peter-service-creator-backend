@@ -142,5 +142,11 @@ urlpatterns = [
 
 
     path('dashboard/', views.DashboardAPIView.as_view(), name='dashboard-api'),
+    path('dashboard/submissions/', views.PaginatedSubmissionsList.as_view(), name='dashboard-submissions'),
+    path('lead-source-analytics/', views.LeadSourceAnalyticsAPIView.as_view(), name='lead-source-analytics'),
+
+    path('monthly-analytics/',views. MonthlyAnalyticsAPIView.as_view(), name='monthly-analytics'),
+    path('yearly-analytics/', views.YearlyAnalyticsAPIView.as_view(), name='yearly-analytics'),
+
 
 ]+ router.urls

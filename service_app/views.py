@@ -1306,7 +1306,7 @@ class DashboardAPIView(APIView):
     - Paginated submissions list
     """
 
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
         # Get query parameters for filtering
@@ -1471,11 +1471,11 @@ class DashboardAPIView(APIView):
                 'created_at': sub['created_at'].isoformat()
             })
         
-        # 7. PAGINATED SUBMISSIONS LIST
-        paginator = SubmissionPagination()
-        submissions_queryset = queryset.order_by('-created_at')
-        paginated_submissions = paginator.paginate_queryset(submissions_queryset, request)
-        serializer = CustomerSubmissionListSerializer(paginated_submissions, many=True)
+        # # 7. PAGINATED SUBMISSIONS LIST
+        # paginator = SubmissionPagination()
+        # submissions_queryset = queryset.order_by('-created_at')
+        # paginated_submissions = paginator.paginate_queryset(submissions_queryset, request)
+        # serializer = CustomerSubmissionListSerializer(paginated_submissions, many=True)
         
         # Build response
         response_data = {
@@ -1493,15 +1493,157 @@ class DashboardAPIView(APIView):
                 'daily_trend': daily_trend,
                 'property_type_breakdown': property_type_breakdown
             },
-            'recent_activity': recent_activity,
-            'submissions': {
-                'results': serializer.data,
-                'count': paginator.page.paginator.count,
-                'next': paginator.get_next_link(),
-                'previous': paginator.get_previous_link(),
-                'total_pages': paginator.page.paginator.num_pages,
-                'current_page': paginator.page.number
-            }
+            'recent_activity': recent_activity
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+
+class PaginatedSubmissionsList(APIView):
+    """
+    Returns a paginated list of submissions with filters.
+    URL: /dashboard/submissions/
+    Query Params:
+        ?page=1
+        ?page_size=20
+        ?status=submitted
+        ?search=John
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        queryset = CustomerSubmission.objects.all().order_by('-created_at')
+
+        # Optional filters
+        status_param = request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        search = request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(customer_name__icontains=search)
+
+        # Pagination
+        paginator = SubmissionPagination()
+        paginated_qs = paginator.paginate_queryset(queryset, request)
+        serializer = CustomerSubmissionListSerializer(paginated_qs, many=True)
+
+        # Paginated response
+        return paginator.get_paginated_response(serializer.data)
+
+
+
+
+
+# New view for Lead Source Analytics
+class LeadSourceAnalyticsAPIView(APIView):
+    """
+    Lead source analytics endpoint that returns:
+    - Lead source breakdown
+    - Number of leads per source
+    - Percentage of leads
+    - Close rate (conversion rate)
+    - Average ticket value
+    - Total amount booked
+    """
+    permission_classes=[IsAuthenticated]
+    def get(self, request):
+        # Get query parameters for filtering
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        status_filter = request.query_params.get('status')  # Optional: filter by specific status change
+        
+        # Base queryset
+        queryset = CustomerSubmission.objects.all()
+        
+        # Apply date filters if provided
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+                queryset = queryset.filter(created_at__gte=start_date_obj)
+            except ValueError:
+                pass
+        
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+                queryset = queryset.filter(created_at__lte=end_date_obj)
+            except ValueError:
+                pass
+        
+        # Total number of submissions (for percentage calculation)
+        total_leads = queryset.count()
+        
+        # Aggregate data by heard_about_us (lead source)
+        lead_source_data = queryset.exclude(
+            Q(heard_about_us__isnull=True) | Q(heard_about_us='')
+        ).values('heard_about_us').annotate(
+            num_of_leads=Count('id'),
+            num_submitted=Count('id', filter=Q(status='submitted')),
+            total_booked=Sum('final_total', filter=Q(status='submitted')),
+            avg_ticket=Sum('final_total', filter=Q(status='submitted'))
+        ).order_by('-num_of_leads')
+        
+        # Format the data
+        analytics_data = []
+        for item in lead_source_data:
+            num_leads = item['num_of_leads']
+            num_submitted = item['num_submitted'] or 0
+            total_booked = item['total_booked'] or Decimal('0.00')
+            
+            # Calculate percentage of leads
+            percentage_of_leads = (num_leads / total_leads * 100) if total_leads > 0 else 0
+            
+            # Calculate close rate (conversion rate)
+            close_rate = (num_submitted / num_leads * 100) if num_leads > 0 else 0
+            
+            # Calculate average ticket
+            avg_ticket = (total_booked / num_submitted) if num_submitted > 0 else Decimal('0.00')
+            
+            analytics_data.append({
+                'leadsource': item['heard_about_us'],
+                'num_of_leads': num_leads,
+                'percentage_of_leads': round(percentage_of_leads, 1),
+                'close_rate': round(close_rate, 1),
+                'avg_ticket': float(avg_ticket),
+                'total_booked': float(total_booked)
+            })
+        
+        # Calculate totals
+        total_summary = {
+            'total_leads': total_leads,
+            'total_submitted': queryset.filter(status='submitted').count(),
+            'overall_close_rate': round(
+                (queryset.filter(status='submitted').count() / total_leads * 100) if total_leads > 0 else 0,
+                1
+            ),
+            'total_revenue': float(
+                queryset.filter(status='submitted').aggregate(
+                    total=Sum('final_total')
+                )['total'] or Decimal('0.00')
+            ),
+            'overall_avg_ticket': float(
+                queryset.filter(status='submitted').aggregate(
+                    avg=Sum('final_total')
+                )['avg'] or Decimal('0.00')
+            )
+        }
+        
+        # Calculate overall average ticket properly
+        if total_summary['total_submitted'] > 0:
+            total_summary['overall_avg_ticket'] = round(
+                total_summary['total_revenue'] / total_summary['total_submitted'],
+                2
+            )
+        
+        response_data = {
+            'date_range': {
+                'start_date': start_date,
+                'end_date': end_date
+            },
+            'summary': total_summary,
+            'lead_sources': analytics_data
         }
         
         return Response(response_data, status=status.HTTP_200_OK)
@@ -1509,3 +1651,184 @@ class DashboardAPIView(APIView):
 
 
 
+# New view for Monthly Analytics by Year
+class MonthlyAnalyticsAPIView(APIView):
+    """
+    Monthly analytics endpoint that returns:
+    - Monthly breakdown by year
+    - Number of bids per month
+    - Closed bids (submitted status)
+    - Close rate
+    - Total amount booked
+    - Average ticket value
+    """
+    
+    def get(self, request):
+        # Get year parameter (required)
+        year = request.query_params.get('year')
+        
+        if not year:
+            return Response(
+                {'error': 'Year parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            year = int(year)
+        except ValueError:
+            return Response(
+                {'error': 'Invalid year format. Please provide a valid year (e.g., 2024)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Filter queryset by year
+        queryset = CustomerSubmission.objects.filter(
+            created_at__year=year
+        )
+        
+        # Aggregate data by month
+        monthly_data = queryset.annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            num_of_bids=Count('id'),
+            closed_bids=Count('id', filter=Q(status='submitted')),
+            total_booked=Sum('final_total', filter=Q(status='submitted'))
+        ).order_by('-month')
+        
+        # Format the data
+        analytics_data = []
+        for item in monthly_data:
+            num_bids = item['num_of_bids']
+            closed_bids = item['closed_bids'] or 0
+            total_booked = item['total_booked'] or Decimal('0.00')
+            
+            # Calculate close rate
+            close_rate = (closed_bids / num_bids * 100) if num_bids > 0 else 0
+            
+            # Calculate average ticket
+            avg_ticket = (total_booked / closed_bids) if closed_bids > 0 else Decimal('0.00')
+            
+            analytics_data.append({
+                'month': item['month'].strftime('%B'),  # Full month name
+                'month_number': item['month'].month,
+                'num_of_bids': num_bids,
+                'closed_bids': closed_bids,
+                'close_rate': round(close_rate, 0),  # Round to whole number like in image
+                'total_booked': float(total_booked),
+                'avg_ticket': float(avg_ticket)
+            })
+        
+        # Calculate year totals
+        year_totals = queryset.aggregate(
+            total_bids=Count('id'),
+            total_closed=Count('id', filter=Q(status='submitted')),
+            total_revenue=Sum('final_total', filter=Q(status='submitted'))
+        )
+        
+        total_closed = year_totals['total_closed'] or 0
+        total_revenue = year_totals['total_revenue'] or Decimal('0.00')
+        
+        year_summary = {
+            'year': year,
+            'total_bids': year_totals['total_bids'],
+            'total_closed_bids': total_closed,
+            'overall_close_rate': round(
+                (total_closed / year_totals['total_bids'] * 100) if year_totals['total_bids'] > 0 else 0,
+                0
+            ),
+            'total_revenue': float(total_revenue),
+            'overall_avg_ticket': float(
+                (total_revenue / total_closed) if total_closed > 0 else Decimal('0.00')
+            )
+        }
+        
+        response_data = {
+            'year': year,
+            'summary': year_summary,
+            'monthly_data': analytics_data
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+# New view for All Years Analytics
+class YearlyAnalyticsAPIView(APIView):
+    """
+    Returns analytics grouped by year with monthly breakdown
+    """
+    
+    def get(self, request):
+        # Get all unique years from submissions
+        years = CustomerSubmission.objects.dates('created_at', 'year', order='DESC')
+        
+        all_years_data = []
+        
+        for year_date in years:
+            year = year_date.year
+            
+            # Filter queryset by year
+            queryset = CustomerSubmission.objects.filter(
+                created_at__year=year
+            )
+            
+            # Aggregate data by month
+            monthly_data = queryset.annotate(
+                month=TruncMonth('created_at')
+            ).values('month').annotate(
+                num_of_bids=Count('id'),
+                closed_bids=Count('id', filter=Q(status='submitted')),
+                total_booked=Sum('final_total', filter=Q(status='submitted'))
+            ).order_by('-month')
+            
+            # Format monthly data
+            months_list = []
+            for item in monthly_data:
+                num_bids = item['num_of_bids']
+                closed_bids = item['closed_bids'] or 0
+                total_booked = item['total_booked'] or Decimal('0.00')
+                
+                close_rate = (closed_bids / num_bids * 100) if num_bids > 0 else 0
+                avg_ticket = (total_booked / closed_bids) if closed_bids > 0 else Decimal('0.00')
+                
+                months_list.append({
+                    'month': item['month'].strftime('%B'),
+                    'month_number': item['month'].month,
+                    'num_of_bids': num_bids,
+                    'closed_bids': closed_bids,
+                    'close_rate': round(close_rate, 0),
+                    'total_booked': float(total_booked),
+                    'avg_ticket': float(avg_ticket)
+                })
+            
+            # Year summary
+            year_totals = queryset.aggregate(
+                total_bids=Count('id'),
+                total_closed=Count('id', filter=Q(status='submitted')),
+                total_revenue=Sum('final_total', filter=Q(status='submitted'))
+            )
+            
+            total_closed = year_totals['total_closed'] or 0
+            total_revenue = year_totals['total_revenue'] or Decimal('0.00')
+            
+            all_years_data.append({
+                'year': year,
+                'summary': {
+                    'total_bids': year_totals['total_bids'],
+                    'total_closed_bids': total_closed,
+                    'overall_close_rate': round(
+                        (total_closed / year_totals['total_bids'] * 100) if year_totals['total_bids'] > 0 else 0,
+                        0
+                    ),
+                    'total_revenue': float(total_revenue),
+                    'overall_avg_ticket': float(
+                        (total_revenue / total_closed) if total_closed > 0 else Decimal('0.00')
+                    )
+                },
+                'monthly_data': months_list
+            })
+        
+        response_data = {
+            'years': all_years_data
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
