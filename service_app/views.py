@@ -1522,8 +1522,9 @@ class PaginatedSubmissionsList(APIView):
 
         search = request.query_params.get('search')
         if search:
-            queryset = queryset.filter(customer_name__icontains=search)
-
+            queryset = queryset.filter(
+                Q(first_name__icontains=search) | Q(last_name__icontains=search)
+            )
         # Pagination
         paginator = SubmissionPagination()
         paginated_qs = paginator.paginate_queryset(queryset, request)
