@@ -1314,7 +1314,7 @@ class DashboardAPIView(APIView):
         end_date = request.query_params.get('end_date')
         
         # Base queryset
-        queryset = CustomerSubmission.objects.all()
+        queryset = CustomerSubmission.objects.filter(is_on_the_go=False)
         
         # Apply date filters if provided
         if start_date:
@@ -1513,7 +1513,7 @@ class PaginatedSubmissionsList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        queryset = CustomerSubmission.objects.all().order_by('-created_at')
+        queryset = CustomerSubmission.objects.filter(is_on_the_go=False).order_by('-created_at')
 
         # Optional filters
         status_param = request.query_params.get('status')
@@ -1556,7 +1556,7 @@ class LeadSourceAnalyticsAPIView(APIView):
         status_filter = request.query_params.get('status')  # Optional: filter by specific status change
         
         # Base queryset
-        queryset = CustomerSubmission.objects.all()
+        queryset = CustomerSubmission.objects.filter(is_on_the_go=False)
         
         # Apply date filters if provided
         if start_date:
@@ -1684,7 +1684,8 @@ class MonthlyAnalyticsAPIView(APIView):
         
         # Filter queryset by year
         queryset = CustomerSubmission.objects.filter(
-            created_at__year=year
+            created_at__year=year,
+            is_on_the_go=False
         )
         
         # Aggregate data by month
@@ -1769,7 +1770,8 @@ class YearlyAnalyticsAPIView(APIView):
             
             # Filter queryset by year
             queryset = CustomerSubmission.objects.filter(
-                created_at__year=year
+                created_at__year=year,
+                is_on_the_go=False
             )
             
             # Aggregate data by month
