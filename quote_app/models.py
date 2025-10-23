@@ -27,8 +27,8 @@ class CustomerSubmission(models.Model):
     ghl_contact_id = models.CharField(max_length=100, null=True, blank=True)
     declined_at = models.DateTimeField(null=True, blank=True)
 
-    allow_sms = models.BooleanField(default=False)
-    allow_email = models.BooleanField(default=True)
+    allow_sms = models.BooleanField(default=False,null=True, blank=True)
+    allow_email = models.BooleanField(default=True,null=True, blank=True)
 
     # Address info
     street_address = models.TextField(null=True, blank=True)
@@ -46,7 +46,7 @@ class CustomerSubmission(models.Model):
     property_name = models.CharField(max_length=255, null=True, blank=True)  # only for commercial
 
     num_floors = models.CharField(max_length=50, null=True, blank=True)  # e.g., "1 story", "2 story"
-    is_previous_customer = models.BooleanField(default=False)
+    is_previous_customer = models.BooleanField(default=False,null=True, blank=True)
 
     # Size info
     size_range = models.ForeignKey(GlobalSizePackage, on_delete=models.SET_NULL, null=True, blank=True)
