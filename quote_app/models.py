@@ -109,6 +109,31 @@ class CustomerSubmission(models.Model):
     
 
 
+class CustomerAvailability(models.Model):
+    """Availability slots linked to a customer submission"""
+    TIME_CHOICES = [
+        ("Morning", "Morning"),
+        ("Afternoon", "Afternoon"),
+        ("Evening", "Evening"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.ForeignKey(CustomerSubmission, related_name="availabilities", on_delete=models.CASCADE)
+    date = models.DateField()
+    time = models.CharField(max_length=20, choices=TIME_CHOICES)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "customer_availabilities"
+        unique_together = ("submission", "date", "time")
+        ordering = ["date"]
+
+    def __str__(self):
+        return f"{self.date} - {self.time}"
+    
+
+
 
 class SubmissionAddOn(models.Model):
     submission = models.ForeignKey(

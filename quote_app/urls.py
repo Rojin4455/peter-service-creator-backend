@@ -28,6 +28,9 @@ urlpatterns = [
     
     # Step 8: Submit final quote
     path('<uuid:submission_id>/submit/', views.SubmitFinalQuoteView.as_view(), name='submit-quote'),
+
+    path("submissions/<uuid:submission_id>/availability/", views.CustomerAvailabilityView.as_view(), name="customer-availability"),
+
     
     # ============================================================================
     # UTILITY ENDPOINTS

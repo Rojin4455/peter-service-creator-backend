@@ -19,14 +19,14 @@ from service_app.models import (
 from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote, SubmissionAddOn
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote, SubmissionAddOn,CustomerAvailability
 )
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,SubmissionAddOnSerializer,
-    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer
+    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer
 )
 
 from service_app.serializers import GlobalSizePackageSerializer
@@ -1044,6 +1044,64 @@ class SubmitFinalQuoteView(APIView):
         return sqft_mapping.price if sqft_mapping else Decimal('0.00')
     
 
+
+class CustomerAvailabilityView(APIView):
+    """
+    API endpoint to manage availability slots for a submission.
+    Supports bulk creation (multiple dates/times in one request).
+    """
+    permission_classes=[AllowAny]
+    def post(self, request, submission_id):
+        """Add one or more availability options for a submission"""
+        try:
+            submission = CustomerSubmission.objects.get(id=submission_id)
+        except CustomerSubmission.DoesNotExist:
+            return Response({"error": "Submission not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = MultipleAvailabilitySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        availabilities_data = serializer.validated_data["availabilities"]
+
+        # Enforce max 2 total per submission
+        existing_count = submission.availabilities.count()
+        if existing_count + len(availabilities_data) > 2:
+            return Response(
+                {"error": f"You already have {existing_count} availability option(s). "
+                          "You can only have a total of 2."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        created = []
+        with transaction.atomic():
+            for item in availabilities_data:
+                date = item["date"]
+                time = item["time"]
+
+                # Avoid duplicate entries for same date/time
+                if not CustomerAvailability.objects.filter(submission=submission, date=date, time=time).exists():
+                    availability = CustomerAvailability.objects.create(
+                        submission=submission, date=date, time=time
+                    )
+                    created.append(availability)
+
+        response_serializer = CustomerAvailabilitySerializer(created, many=True)
+        return Response(
+            {"message": "Availabilities added successfully", "data": response_serializer.data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, submission_id):
+        """Fetch all availability options for a submission"""
+        try:
+            submission = CustomerSubmission.objects.get(id=submission_id)
+        except CustomerSubmission.DoesNotExist:
+            return Response({"error": "Submission not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        availabilities = submission.availabilities.all()
+        serializer = CustomerAvailabilitySerializer(availabilities, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 

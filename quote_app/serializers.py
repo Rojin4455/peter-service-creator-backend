@@ -8,7 +8,7 @@ from service_app.models import (
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote,SubmissionAddOn
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote,SubmissionAddOn,CustomerAvailability
 )
 
 from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
@@ -203,6 +203,21 @@ class SubmissionAddOnSerializer(serializers.ModelSerializer):
         fields = ["id", "addon", "addon_name", "addon_price", "quantity", "subtotal"]
 
 
+
+class CustomerAvailabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerAvailability
+        fields = ["date", "time"]  # omit submission; we’ll attach it in the view
+
+
+class MultipleAvailabilitySerializer(serializers.Serializer):
+    availabilities = CustomerAvailabilitySerializer(many=True)
+
+    def validate_availabilities(self, value):
+        if len(value) > 2:
+            raise serializers.ValidationError("You can select up to 2 availability options only.")
+        return value
+
 from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
@@ -212,6 +227,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     # addons = AddOnServiceSerializer(many=True, read_only=True)
     # addons = SubmissionAddOnSerializer(many=True, read_only=True)
     addons = SubmissionAddOnSerializer(source='submission_addons', many=True, read_only=True)
+    availabilities = CustomerAvailabilitySerializer(many=True, read_only=True)
 
 
     applied_coupon = CouponSerializer(read_only=True)
@@ -225,12 +241,15 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'company_name',
             'customer_email', 'customer_phone', 'postal_code',
             'allow_sms', 'allow_email','is_bid_in_person',
+            
 
             # Address info
             'street_address', 'location', 'location_details',
 
             # Discovery
             'heard_about_us',
+
+        
 
             # Property info
             'property_type', 'property_name', 'num_floors', 'is_previous_customer',
@@ -240,6 +259,8 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
 
             # Submission details
             'status', 'selected_services',
+
+            "availabilities",
 
             # Pricing
             'total_base_price', 'total_adjustments', 'total_surcharges',
@@ -466,6 +487,7 @@ class SubmitFinalQuoteSerializer(serializers.Serializer):
             raise serializers.ValidationError("Terms and conditions must be accepted")
         return value
     
+
 
 
 
