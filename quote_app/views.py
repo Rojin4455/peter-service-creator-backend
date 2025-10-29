@@ -909,8 +909,8 @@ class SubmitFinalQuoteView(APIView):
                 submission.save()
                 
                 # Calculate final totals with new logic (including add-ons)
-                if submission.final_total == Decimal('0.00'):
-                    self._calculate_final_totals_new(submission)
+                # if submission.final_total == Decimal('0.00'):
+                self._calculate_final_totals_new(submission)
                     
                 # Send notifications, create orders, etc.
 
@@ -1054,11 +1054,16 @@ class EditServiceResponsesView(APIView):
     """Edit responses for a submitted service while preserving package selection"""
     permission_classes = [AllowAny]  # Or your custom permission
     
+    # Add this property to reuse in helper methods
+    bid_in_person = False
+    
     def put(self, request, submission_id, service_id):
         """
         Edit service responses after submission.
         Preserves package selection and recalculates all totals.
         """
+        self.bid_in_person = False  # Reset for each request
+        
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         
         # Verify submission is in submitted state
@@ -1079,7 +1084,7 @@ class EditServiceResponsesView(APIView):
         old_responses_snapshot = self._capture_responses_snapshot(service_selection)
         
         responses = request.data.get('responses', [])
-        edited_by = request.data.get('edited_by', 'admin')  # Pass from frontend
+        edited_by = request.data.get('edited_by', 'admin')
         edit_reason = request.data.get('edit_reason', '')
         
         try:
@@ -1099,7 +1104,7 @@ class EditServiceResponsesView(APIView):
                 # Clear existing responses (but not the service selection itself)
                 service_selection.question_responses.all().delete()
                 
-                # Process new responses (reuse existing logic)
+                # Process new responses
                 ordered_responses = self._order_responses_by_dependency(responses)
                 total_adjustment = Decimal('0.00')
                 
@@ -1150,7 +1155,9 @@ class EditServiceResponsesView(APIView):
                     submission.quote_surcharge_applicable = True
                     submission.total_surcharges = surcharge_price
                 
-                # ALWAYS recalculate final totals after edit (not just if 0.00)
+                submission.is_bid_in_person = self.bid_in_person
+                
+                # ALWAYS recalculate final totals after edit
                 self._recalculate_final_totals_after_edit(submission)
                 
                 # Update edit tracking
@@ -1208,23 +1215,17 @@ class EditServiceResponsesView(APIView):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     def _restore_package_selection(self, service_selection, package_id, submission):
-        """
-        Restore the previously selected package and update service selection totals.
-        This ensures the user's original package choice is preserved after editing.
-        """
+        """Restore the previously selected package and update service selection totals"""
         try:
-            # Get the regenerated quote for the previously selected package
             package_quote = CustomerPackageQuote.objects.get(
                 service_selection=service_selection,
                 package_id=package_id
             )
             
-            # Mark this quote as selected (clear others)
             service_selection.package_quotes.update(is_selected=False)
             package_quote.is_selected = True
             package_quote.save()
             
-            # Update service selection with new totals from regenerated quote
             service_selection.selected_package_id = package_id
             service_selection.final_base_price = package_quote.base_price + package_quote.sqft_price
             service_selection.final_sqft_price = package_quote.sqft_price
@@ -1235,16 +1236,11 @@ class EditServiceResponsesView(APIView):
             
         except CustomerPackageQuote.DoesNotExist:
             print(f"[ERROR] Could not restore package {package_id} - quote not found after regeneration")
-            # Package may have been deleted or is no longer valid
-            # Clear selection and let admin re-select
             service_selection.selected_package = None
             service_selection.save()
     
     def _recalculate_final_totals_after_edit(self, submission):
-        """
-        Recalculate final totals after editing responses.
-        Similar to _calculate_final_totals_new but always runs regardless of current total.
-        """
+        """Recalculate final totals after editing responses"""
         service_selections = submission.customerserviceselection_set.filter(
             selected_package__isnull=False
         )
@@ -1256,7 +1252,6 @@ class EditServiceResponsesView(APIView):
         
         print(f"[DEBUG] Recalculating totals after edit for submission {submission.id}")
         
-        # Calculate service totals from SELECTED packages only
         for selection in service_selections:
             selected_quote = selection.package_quotes.filter(is_selected=True).first()
             if selected_quote:
@@ -1267,45 +1262,34 @@ class EditServiceResponsesView(APIView):
                 print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
                       f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
         
-        # Calculate add-ons total
         submission_addons = submission.submission_addons.select_related("addon")
         for sub_addon in submission_addons:
             subtotal = sub_addon.addon.base_price * sub_addon.quantity
             total_addons_price += subtotal
-            print(f"[DEBUG] Add-on {sub_addon.addon.name}: subtotal={subtotal}")
         
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
         
-        # Calculate pre-discount total
         pre_discount_total = (total_base_price + total_sqft_price + total_adjustments + 
                              submission.total_surcharges + total_addons_price)
         
-        # Apply coupon if valid
         final_total = pre_discount_total
         if submission.applied_coupon and submission.applied_coupon.is_valid():
             final_total = submission.applied_coupon.apply_discount(pre_discount_total)
             submission.is_coupon_applied = True
             submission.discounted_amount = pre_discount_total - final_total
-            print(f"[DEBUG] Coupon {submission.applied_coupon.code} applied: "
-                  f"discount={submission.discounted_amount}, new total={final_total}")
         else:
             submission.is_coupon_applied = False
             submission.discounted_amount = Decimal('0.00')
         
-        # Update submission totals
         submission.total_base_price = total_base_price + total_sqft_price
         submission.total_adjustments = total_adjustments
         submission.total_addons_price = total_addons_price
         submission.final_total = final_total
         
-        # Save original total on first edit
         if submission.edit_count == 0 and not submission.original_final_total:
             submission.original_final_total = submission.final_total
         
         submission.save()
-        
-        print(f"[DEBUG] Updated totals: base={submission.total_base_price}, "
-              f"adjustments={submission.total_adjustments}, final={submission.final_total}")
     
     def _capture_responses_snapshot(self, service_selection):
         """Capture current state of responses for history tracking"""
@@ -1320,14 +1304,6 @@ class EditServiceResponsesView(APIView):
                 'question_text': qr.question.question_text,
                 'yes_no_answer': qr.yes_no_answer,
                 'text_answer': qr.text_answer,
-                'options': [
-                    {'option_id': str(opt.option.id), 'quantity': opt.quantity}
-                    for opt in qr.option_responses.all()
-                ],
-                'sub_questions': [
-                    {'sub_question_id': str(sq.sub_question.id), 'answer': sq.answer}
-                    for sq in qr.sub_question_responses.all()
-                ]
             }
             snapshot['responses'].append(response_data)
         
@@ -1340,29 +1316,94 @@ class EditServiceResponsesView(APIView):
         old_responses_dict = {r['question_id']: r for r in old_snapshot.get('responses', [])}
         new_responses_dict = {r['question_id']: r for r in new_responses}
         
-        # Check for modified/added responses
         for qid, new_resp in new_responses_dict.items():
             if qid in old_responses_dict:
                 old_resp = old_responses_dict[qid]
                 if old_resp.get('yes_no_answer') != new_resp.get('yes_no_answer'):
                     changes.append(f"Question {qid}: answer changed")
-                # Add more detailed comparison as needed
             else:
                 changes.append(f"Question {qid}: new response added")
         
-        # Check for removed responses
         for qid in old_responses_dict:
             if qid not in new_responses_dict:
                 changes.append(f"Question {qid}: response removed")
         
         return changes if changes else ["No significant changes detected"]
     
-    # Reuse helper methods from SubmitServiceResponsesView
-    _validate_conditional_responses = SubmitServiceResponsesView._validate_conditional_responses
-    _order_responses_by_dependency = SubmitServiceResponsesView._order_responses_by_dependency
-    _process_question_response_data = SubmitServiceResponsesView._process_question_response_data
-    _calculate_question_adjustment_for_averaging = SubmitServiceResponsesView._calculate_question_adjustment_for_averaging
-    _generate_all_package_quotes = SubmitServiceResponsesView._generate_all_package_quotes
+    # ============ REUSE METHODS FROM SubmitServiceResponsesView ============
+    # Import all necessary helper methods
+    
+    def _validate_conditional_responses(self, responses, service_id):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._validate_conditional_responses(self, responses, service_id)
+    
+    def _check_condition_met(self, parent_question, parent_response, conditional_question, conditional_response):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._check_condition_met(
+            self, parent_question, parent_response, conditional_question, conditional_response
+        )
+    
+    def _order_responses_by_dependency(self, responses):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._order_responses_by_dependency(self, responses)
+    
+    def _process_question_response_data(self, question, response_data, question_response):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._process_question_response_data(
+            self, question, response_data, question_response
+        )
+    
+    def _calculate_question_adjustment_for_averaging(self, question, response_data, question_response, service_selection):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_question_adjustment_for_averaging(
+            self, question, response_data, question_response, service_selection
+        )
+    
+    def _get_package_sqft_price(self, submission, package):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._get_package_sqft_price(self, submission, package)
+    
+    def _calculate_single_package_adjustment(self, question, response_data, question_response, package, base_sqft_price):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_single_package_adjustment(
+            self, question, response_data, question_response, package, base_sqft_price
+        )
+    
+    def _calculate_options_question_adjustment_from_stored(self, question_response, package, base_sqft_price):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_options_question_adjustment_from_stored(
+            self, question_response, package, base_sqft_price
+        )
+    
+    def _calculate_sub_questions_adjustment_from_stored(self, question_response, package, base_sqft_price):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_sub_questions_adjustment_from_stored(
+            self, question_response, package, base_sqft_price
+        )
+    
+    def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._apply_pricing_rule(
+            self, pricing_type, value, value_type, base_sqft_price, quantity
+        )
+    
+    def _apply_quantity_discounts(self, question, option_adjustments, total_quantity, base_total):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._apply_quantity_discounts(
+            self, question, option_adjustments, total_quantity, base_total
+        )
+    
+    def _generate_all_package_quotes(self, service_selection, submission):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._generate_all_package_quotes(self, service_selection, submission)
+    
+    def _calculate_package_specific_adjustments_new(self, service_selection, package, base_sqft_price):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_package_specific_adjustments_new(
+            self, service_selection, package, base_sqft_price
+        )
+    
+
 
 
 class CustomerAvailabilityView(APIView):
