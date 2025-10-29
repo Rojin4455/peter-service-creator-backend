@@ -66,6 +66,15 @@ class CustomerSubmission(models.Model):
 
     additional_data = models.JSONField(default=dict, null=True, blank=True)
 
+
+    last_edited_at = models.DateTimeField(null=True, blank=True)
+    edited_by = models.CharField(max_length=100, null=True, blank=True)  # Store admin username/email
+    edit_count = models.PositiveIntegerField(default=0)
+    original_final_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    
+    # Store edit history
+    edit_history = models.JSONField(default=list, blank=True)
+
     # # addons = models.ManyToManyField(AddOnService, blank=True, related_name="submissions")
     # old_addons = models.ManyToManyField(
     #     AddOnService,

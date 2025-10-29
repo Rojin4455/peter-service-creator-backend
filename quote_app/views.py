@@ -266,6 +266,7 @@ class SubmitServiceResponsesView(APIView):
                 if not submission.is_on_the_go:
                     create_or_update_ghl_contact(submission)
                 
+                
                 return Response({
                     'message': 'Responses submitted successfully',
                     'all_services_completed': all_services_completed,
@@ -825,6 +826,9 @@ class SubmitServiceResponsesView(APIView):
         return False
     
 
+
+    
+
 class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     """Get detailed submission with all quotes"""
     queryset = CustomerSubmission.objects.all()
@@ -1043,6 +1047,322 @@ class SubmitFinalQuoteView(APIView):
         
         return sqft_mapping.price if sqft_mapping else Decimal('0.00')
     
+
+
+
+class EditServiceResponsesView(APIView):
+    """Edit responses for a submitted service while preserving package selection"""
+    permission_classes = [AllowAny]  # Or your custom permission
+    
+    def put(self, request, submission_id, service_id):
+        """
+        Edit service responses after submission.
+        Preserves package selection and recalculates all totals.
+        """
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        
+        # Verify submission is in submitted state
+        if submission.status != 'submitted':
+            return Response({
+                'error': 'Can only edit responses for submitted quotes'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        service_selection = get_object_or_404(
+            CustomerServiceSelection,
+            submission=submission,
+            service_id=service_id
+        )
+        
+        # Capture current state for history
+        old_package_quote = service_selection.package_quotes.filter(is_selected=True).first()
+        old_total = submission.final_total
+        old_responses_snapshot = self._capture_responses_snapshot(service_selection)
+        
+        responses = request.data.get('responses', [])
+        edited_by = request.data.get('edited_by', 'admin')  # Pass from frontend
+        edit_reason = request.data.get('edit_reason', '')
+        
+        try:
+            with transaction.atomic():
+                # Validate conditional question logic
+                validation_result = self._validate_conditional_responses(responses, service_id)
+                if not validation_result['valid']:
+                    return Response({
+                        'error': 'Invalid conditional question responses',
+                        'details': validation_result['errors']
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # IMPORTANT: Save the currently selected package before clearing responses
+                previously_selected_package = service_selection.selected_package
+                previously_selected_package_id = previously_selected_package.id if previously_selected_package else None
+                
+                # Clear existing responses (but not the service selection itself)
+                service_selection.question_responses.all().delete()
+                
+                # Process new responses (reuse existing logic)
+                ordered_responses = self._order_responses_by_dependency(responses)
+                total_adjustment = Decimal('0.00')
+                
+                for response_data in ordered_responses:
+                    question_id = response_data['question_id']
+                    question = get_object_or_404(Question, id=question_id)
+                    
+                    # Create question response
+                    question_response = CustomerQuestionResponse.objects.create(
+                        service_selection=service_selection,
+                        question=question,
+                        yes_no_answer=response_data.get('yes_no_answer'),
+                        text_answer=response_data.get('text_answer', '')
+                    )
+                    
+                    # Process response data
+                    self._process_question_response_data(question, response_data, question_response)
+                    
+                    # Calculate adjustment
+                    question_adjustment = self._calculate_question_adjustment_for_averaging(
+                        question, response_data, question_response, service_selection
+                    )
+                    
+                    question_response.price_adjustment = question_adjustment
+                    question_response.save()
+                    
+                    total_adjustment += question_adjustment
+                
+                # Update service selection adjustments
+                service_selection.question_adjustments = total_adjustment
+                service_selection.save()
+                
+                # Regenerate ALL package quotes with new pricing
+                surcharge_applied, surcharge_price = self._generate_all_package_quotes(
+                    service_selection, submission
+                )
+                
+                # CRITICAL: Restore the previously selected package
+                if previously_selected_package_id:
+                    self._restore_package_selection(
+                        service_selection, 
+                        previously_selected_package_id,
+                        submission
+                    )
+                
+                # Update submission-level surcharge if applicable
+                if surcharge_applied:
+                    submission.quote_surcharge_applicable = True
+                    submission.total_surcharges = surcharge_price
+                
+                # ALWAYS recalculate final totals after edit (not just if 0.00)
+                self._recalculate_final_totals_after_edit(submission)
+                
+                # Update edit tracking
+                submission.last_edited_at = timezone.now()
+                submission.edited_by = edited_by
+                submission.edit_count += 1
+                
+                # Add to edit history
+                edit_history_entry = {
+                    'edited_at': timezone.now().isoformat(),
+                    'edited_by': edited_by,
+                    'service_id': str(service_id),
+                    'service_name': service_selection.service.name,
+                    'edit_reason': edit_reason,
+                    'old_total': str(old_total),
+                    'new_total': str(submission.final_total),
+                    'old_question_adjustments': str(old_responses_snapshot.get('question_adjustments', '0.00')),
+                    'new_question_adjustments': str(service_selection.question_adjustments),
+                    'changes_summary': self._generate_changes_summary(old_responses_snapshot, responses)
+                }
+                
+                if not submission.edit_history:
+                    submission.edit_history = []
+                submission.edit_history.append(edit_history_entry)
+                
+                submission.save()
+                
+                # Update GHL contact if needed
+                if not submission.is_on_the_go:
+                    create_or_update_ghl_contact(submission, is_submit=True)
+                
+                # Get updated quote for response
+                new_package_quote = service_selection.package_quotes.filter(is_selected=True).first()
+                
+                return Response({
+                    'message': 'Responses updated successfully',
+                    'submission_id': submission.id,
+                    'service_id': service_id,
+                    'total_questions_answered': len(ordered_responses),
+                    'old_total': old_total,
+                    'new_total': submission.final_total,
+                    'total_change': submission.final_total - old_total,
+                    'package_preserved': previously_selected_package_id is not None,
+                    'selected_package': {
+                        'id': new_package_quote.package.id,
+                        'name': new_package_quote.package.name,
+                        'old_price': old_package_quote.total_price if old_package_quote else None,
+                        'new_price': new_package_quote.total_price
+                    } if new_package_quote else None,
+                    'edit_count': submission.edit_count,
+                    'surcharge_applied': surcharge_applied
+                })
+        
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def _restore_package_selection(self, service_selection, package_id, submission):
+        """
+        Restore the previously selected package and update service selection totals.
+        This ensures the user's original package choice is preserved after editing.
+        """
+        try:
+            # Get the regenerated quote for the previously selected package
+            package_quote = CustomerPackageQuote.objects.get(
+                service_selection=service_selection,
+                package_id=package_id
+            )
+            
+            # Mark this quote as selected (clear others)
+            service_selection.package_quotes.update(is_selected=False)
+            package_quote.is_selected = True
+            package_quote.save()
+            
+            # Update service selection with new totals from regenerated quote
+            service_selection.selected_package_id = package_id
+            service_selection.final_base_price = package_quote.base_price + package_quote.sqft_price
+            service_selection.final_sqft_price = package_quote.sqft_price
+            service_selection.final_total_price = package_quote.total_price
+            service_selection.save()
+            
+            print(f"[DEBUG] Restored package selection: {package_id} with new price: {package_quote.total_price}")
+            
+        except CustomerPackageQuote.DoesNotExist:
+            print(f"[ERROR] Could not restore package {package_id} - quote not found after regeneration")
+            # Package may have been deleted or is no longer valid
+            # Clear selection and let admin re-select
+            service_selection.selected_package = None
+            service_selection.save()
+    
+    def _recalculate_final_totals_after_edit(self, submission):
+        """
+        Recalculate final totals after editing responses.
+        Similar to _calculate_final_totals_new but always runs regardless of current total.
+        """
+        service_selections = submission.customerserviceselection_set.filter(
+            selected_package__isnull=False
+        )
+        
+        total_base_price = Decimal('0.00')
+        total_sqft_price = Decimal('0.00')
+        total_adjustments = Decimal('0.00')
+        total_addons_price = Decimal('0.00')
+        
+        print(f"[DEBUG] Recalculating totals after edit for submission {submission.id}")
+        
+        # Calculate service totals from SELECTED packages only
+        for selection in service_selections:
+            selected_quote = selection.package_quotes.filter(is_selected=True).first()
+            if selected_quote:
+                total_base_price += selected_quote.base_price
+                total_sqft_price += selected_quote.sqft_price
+                total_adjustments += selected_quote.question_adjustments
+                
+                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
+                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
+        
+        # Calculate add-ons total
+        submission_addons = submission.submission_addons.select_related("addon")
+        for sub_addon in submission_addons:
+            subtotal = sub_addon.addon.base_price * sub_addon.quantity
+            total_addons_price += subtotal
+            print(f"[DEBUG] Add-on {sub_addon.addon.name}: subtotal={subtotal}")
+        
+        print(f"[DEBUG] Total add-ons price: {total_addons_price}")
+        
+        # Calculate pre-discount total
+        pre_discount_total = (total_base_price + total_sqft_price + total_adjustments + 
+                             submission.total_surcharges + total_addons_price)
+        
+        # Apply coupon if valid
+        final_total = pre_discount_total
+        if submission.applied_coupon and submission.applied_coupon.is_valid():
+            final_total = submission.applied_coupon.apply_discount(pre_discount_total)
+            submission.is_coupon_applied = True
+            submission.discounted_amount = pre_discount_total - final_total
+            print(f"[DEBUG] Coupon {submission.applied_coupon.code} applied: "
+                  f"discount={submission.discounted_amount}, new total={final_total}")
+        else:
+            submission.is_coupon_applied = False
+            submission.discounted_amount = Decimal('0.00')
+        
+        # Update submission totals
+        submission.total_base_price = total_base_price + total_sqft_price
+        submission.total_adjustments = total_adjustments
+        submission.total_addons_price = total_addons_price
+        submission.final_total = final_total
+        
+        # Save original total on first edit
+        if submission.edit_count == 0 and not submission.original_final_total:
+            submission.original_final_total = submission.final_total
+        
+        submission.save()
+        
+        print(f"[DEBUG] Updated totals: base={submission.total_base_price}, "
+              f"adjustments={submission.total_adjustments}, final={submission.final_total}")
+    
+    def _capture_responses_snapshot(self, service_selection):
+        """Capture current state of responses for history tracking"""
+        snapshot = {
+            'question_adjustments': service_selection.question_adjustments,
+            'responses': []
+        }
+        
+        for qr in service_selection.question_responses.all():
+            response_data = {
+                'question_id': str(qr.question.id),
+                'question_text': qr.question.question_text,
+                'yes_no_answer': qr.yes_no_answer,
+                'text_answer': qr.text_answer,
+                'options': [
+                    {'option_id': str(opt.option.id), 'quantity': opt.quantity}
+                    for opt in qr.option_responses.all()
+                ],
+                'sub_questions': [
+                    {'sub_question_id': str(sq.sub_question.id), 'answer': sq.answer}
+                    for sq in qr.sub_question_responses.all()
+                ]
+            }
+            snapshot['responses'].append(response_data)
+        
+        return snapshot
+    
+    def _generate_changes_summary(self, old_snapshot, new_responses):
+        """Generate a human-readable summary of what changed"""
+        changes = []
+        
+        old_responses_dict = {r['question_id']: r for r in old_snapshot.get('responses', [])}
+        new_responses_dict = {r['question_id']: r for r in new_responses}
+        
+        # Check for modified/added responses
+        for qid, new_resp in new_responses_dict.items():
+            if qid in old_responses_dict:
+                old_resp = old_responses_dict[qid]
+                if old_resp.get('yes_no_answer') != new_resp.get('yes_no_answer'):
+                    changes.append(f"Question {qid}: answer changed")
+                # Add more detailed comparison as needed
+            else:
+                changes.append(f"Question {qid}: new response added")
+        
+        # Check for removed responses
+        for qid in old_responses_dict:
+            if qid not in new_responses_dict:
+                changes.append(f"Question {qid}: response removed")
+        
+        return changes if changes else ["No significant changes detected"]
+    
+    # Reuse helper methods from SubmitServiceResponsesView
+    _validate_conditional_responses = SubmitServiceResponsesView._validate_conditional_responses
+    _order_responses_by_dependency = SubmitServiceResponsesView._order_responses_by_dependency
+    _process_question_response_data = SubmitServiceResponsesView._process_question_response_data
+    _calculate_question_adjustment_for_averaging = SubmitServiceResponsesView._calculate_question_adjustment_for_averaging
+    _generate_all_package_quotes = SubmitServiceResponsesView._generate_all_package_quotes
 
 
 class CustomerAvailabilityView(APIView):
