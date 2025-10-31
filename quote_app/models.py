@@ -26,6 +26,8 @@ class CustomerSubmission(models.Model):
     postal_code = models.CharField(max_length=20, null=True, blank=True)
     ghl_contact_id = models.CharField(max_length=100, null=True, blank=True)
     declined_at = models.DateTimeField(null=True, blank=True)
+    quote_url = models.TextField(null=True, blank=True)
+
 
     allow_sms = models.BooleanField(default=False,null=True, blank=True)
     allow_email = models.BooleanField(default=True,null=True, blank=True)

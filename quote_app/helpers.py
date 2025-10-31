@@ -52,6 +52,12 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             )
         }]
 
+        url = f"{config('BASE_FRONTEND_URI')}/booking?submission_id={submission.id}" if not is_submit else f"{config('BASE_FRONTEND_URI')}/quote/details/{submission.id}"
+
+        submission.quote_url=url
+        submission.save()
+
+
         # Quoted Date (use submission.updated_at or created_at or explicit expires_at)
         quoted_date_value = submission.created_at.strftime("%Y-%m-%d") if submission.created_at else None
         if quoted_date_value:
