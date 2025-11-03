@@ -1208,6 +1208,9 @@ class EditServiceResponsesView(APIView):
                         submission
                     )
                 
+                # Refresh service selection from database to get latest package quotes
+                service_selection.refresh_from_db()
+                
                 # Update submission-level surcharge if applicable
                 if surcharge_applied:
                     submission.quote_surcharge_applicable = True
@@ -1299,9 +1302,13 @@ class EditServiceResponsesView(APIView):
     
     def _recalculate_final_totals_after_edit(self, submission):
         """Recalculate final totals after editing responses"""
+        # Refresh submission from database to get latest data
+        submission.refresh_from_db()
+        
+        # Prefetch package quotes to ensure we get the latest data
         service_selections = submission.customerserviceselection_set.filter(
             selected_package__isnull=False
-        )
+        ).prefetch_related('package_quotes')
         
         total_base_price = Decimal('0.00')
         total_sqft_price = Decimal('0.00')
@@ -1312,6 +1319,8 @@ class EditServiceResponsesView(APIView):
         print(f"[DEBUG] Recalculating totals after edit for submission {submission.id}")
         
         for selection in service_selections:
+            # Refresh selection to ensure we have latest package quotes
+            selection.refresh_from_db()
             selected_quote = selection.package_quotes.filter(is_selected=True).first()
             if selected_quote:
                 total_base_price += selected_quote.base_price
