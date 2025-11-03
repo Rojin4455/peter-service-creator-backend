@@ -583,8 +583,13 @@ class SubmitServiceResponsesView(APIView):
             question_adjustments = self._calculate_package_specific_adjustments_new(
                 service_selection, package, sqft_price
             )
-            
-            total_price = base_price + sqft_price + question_adjustments
+
+            # New total logic:
+            # - Compute the quoted total WITHOUT base_price
+            # - If quoted total is below the package base_price, use base_price
+            # - Otherwise, do not add base_price again
+            quoted_total = sqft_price + question_adjustments
+            total_price = base_price if quoted_total < base_price else quoted_total
             
             # Get package features
             package_features = PackageFeature.objects.filter(package=package).select_related('feature')
@@ -1142,8 +1147,15 @@ class EditServiceResponsesView(APIView):
                     service_selection, submission
                 )
                 
-                # CRITICAL: Restore the previously selected package
-                if previously_selected_package_id:
+                # CRITICAL: Optionally switch package if admin provided new_package_id; else restore previous selection
+                new_package_id = request.data.get('new_package_id')
+                if new_package_id:
+                    self._restore_package_selection(
+                        service_selection,
+                        new_package_id,
+                        submission
+                    )
+                elif previously_selected_package_id:
                     self._restore_package_selection(
                         service_selection, 
                         previously_selected_package_id,

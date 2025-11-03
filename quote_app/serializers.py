@@ -315,10 +315,8 @@ class CustomerServiceSelectionDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_package_quotes(self, obj):
-        if obj.selected_package:
-            quotes = obj.package_quotes.filter(is_selected=True)
-        else:
-            quotes = obj.package_quotes.all().order_by('package__order')
+        # Always show all available package quotes (selected and unselected), ordered by package order
+        quotes = obj.package_quotes.all().order_by('package__order')
 
         filtered_quotes = []
         for quote in quotes:
