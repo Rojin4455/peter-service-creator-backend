@@ -1262,6 +1262,7 @@ class EditServiceResponsesView(APIView):
         total_sqft_price = Decimal('0.00')
         total_adjustments = Decimal('0.00')
         total_addons_price = Decimal('0.00')
+        total_services_price = Decimal('0.00')
         
         print(f"[DEBUG] Recalculating totals after edit for submission {submission.id}")
         
