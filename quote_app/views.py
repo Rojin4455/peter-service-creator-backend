@@ -979,6 +979,8 @@ class SubmitFinalQuoteView(APIView):
         total_sqft_price = Decimal('0.00')
         total_adjustments = Decimal('0.00')
         total_addons_price = Decimal('0.00')
+        total_services_price = Decimal('0.00')
+        total_services_price = Decimal('0.00')
         
         print(f"[DEBUG] Calculating final totals for submission {submission.id}")
         
@@ -986,14 +988,13 @@ class SubmitFinalQuoteView(APIView):
         for selection in service_selections:
             selected_quote = selection.package_quotes.filter(is_selected=True).first()
             if selected_quote:
-                # Base price from package
+                # Track components for reporting (optional)
                 total_base_price += selected_quote.base_price
-                # Square footage price from size range
                 total_sqft_price += selected_quote.sqft_price
-                # Question adjustments (with new percentage/amount logic)
                 total_adjustments += selected_quote.question_adjustments
-                
-                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
+                # Use computed package total (with base-price-minimum logic applied)
+                total_services_price += selected_quote.total_price
+                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, package_total={selected_quote.total_price}")
         
         # # Calculate add-ons total
         # if submission.addons.exists():
@@ -1015,8 +1016,8 @@ class SubmitFinalQuoteView(APIView):
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
 
         
-        # Final total includes base price + sqft price + adjustments + surcharges + add-ons
-        final_total = total_base_price + total_sqft_price + total_adjustments + submission.total_surcharges + total_addons_price
+        # Final total uses package totals (which already enforce base price minimum) + surcharges + add-ons
+        final_total = total_services_price + submission.total_surcharges + total_addons_price
         
         print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + surcharges={submission.total_surcharges} + addons={total_addons_price} = {final_total}")
 
@@ -1270,9 +1271,9 @@ class EditServiceResponsesView(APIView):
                 total_base_price += selected_quote.base_price
                 total_sqft_price += selected_quote.sqft_price
                 total_adjustments += selected_quote.question_adjustments
-                
+                total_services_price += selected_quote.total_price
                 print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
-                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}")
+                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, package_total={selected_quote.total_price}")
         
         submission_addons = submission.submission_addons.select_related("addon")
         for sub_addon in submission_addons:
@@ -1281,8 +1282,7 @@ class EditServiceResponsesView(APIView):
         
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
         
-        pre_discount_total = (total_base_price + total_sqft_price + total_adjustments + 
-                             submission.total_surcharges + total_addons_price)
+        pre_discount_total = (total_services_price + submission.total_surcharges + total_addons_price)
         
         final_total = pre_discount_total
         if submission.applied_coupon and submission.applied_coupon.is_valid():
