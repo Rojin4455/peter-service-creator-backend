@@ -1098,7 +1098,8 @@ class EditServiceResponsesView(APIView):
             with transaction.atomic():
                 # Package-only edit path: switch package and preserve existing responses
                 new_package_id = request.data.get('new_package_id')
-                if new_package_id and not responses_present:
+                is_package_only = bool(new_package_id) and (not responses_present or not responses)
+                if is_package_only:
                     # Regenerate quotes based on existing stored responses
                     surcharge_applied, surcharge_price = self._generate_all_package_quotes(
                         service_selection, submission
