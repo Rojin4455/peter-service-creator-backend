@@ -1089,13 +1089,57 @@ class EditServiceResponsesView(APIView):
         old_total = submission.final_total
         old_responses_snapshot = self._capture_responses_snapshot(service_selection)
         
+        responses_present = 'responses' in request.data
         responses = request.data.get('responses', [])
         edited_by = request.data.get('edited_by', 'admin')
         edit_reason = request.data.get('edit_reason', '')
         
         try:
             with transaction.atomic():
-                # Validate conditional question logic
+                # Package-only edit path: switch package and preserve existing responses
+                new_package_id = request.data.get('new_package_id')
+                if new_package_id and not responses_present:
+                    # Regenerate quotes based on existing stored responses
+                    surcharge_applied, surcharge_price = self._generate_all_package_quotes(
+                        service_selection, submission
+                    )
+
+                    # Switch the selected package
+                    self._restore_package_selection(
+                        service_selection,
+                        new_package_id,
+                        submission
+                    )
+
+                    if surcharge_applied:
+                        submission.quote_surcharge_applicable = True
+                        submission.total_surcharges = surcharge_price
+
+                    submission.is_bid_in_person = self.bid_in_person
+
+                    # Recalculate totals
+                    self._recalculate_final_totals_after_edit(submission)
+
+                    # Track edit
+                    submission.last_edited_at = timezone.now()
+                    submission.edited_by = edited_by
+                    submission.edit_count += 1
+                    submission.save()
+
+                    new_package_quote = service_selection.package_quotes.filter(is_selected=True).first()
+                    return Response({
+                        'message': 'Package switched successfully (responses preserved)',
+                        'submission_id': submission.id,
+                        'service_id': service_id,
+                        'selected_package': {
+                            'id': new_package_quote.package.id,
+                            'name': new_package_quote.package.name,
+                            'new_price': new_package_quote.total_price
+                        } if new_package_quote else None,
+                        'final_total': submission.final_total
+                    })
+
+                # Validate conditional question logic for full edits
                 validation_result = self._validate_conditional_responses(responses, service_id)
                 if not validation_result['valid']:
                     return Response({
