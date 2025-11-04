@@ -113,6 +113,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
             contact_payload = {
                 "firstName": submission.first_name,
+                "lastName": submission.last_name,
                 "address1": submission.street_address,
                 "customFields": custom_fields,
                 "tags": updated_tags
@@ -128,6 +129,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
    
             contact_payload = {
                 "firstName": submission.first_name,
+                "lastName": submission.last_name,
                 "email": submission.customer_email,
                 "phone": submission.customer_phone,
                 "address1": submission.street_address,

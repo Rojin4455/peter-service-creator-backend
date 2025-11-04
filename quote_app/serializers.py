@@ -196,11 +196,12 @@ class AddOnServiceSerializer(serializers.ModelSerializer):
 
 class SubmissionAddOnSerializer(serializers.ModelSerializer):
     addon_name = serializers.CharField(source="addon.name", read_only=True)
+    addon_description = serializers.CharField(source="addon.description", read_only=True)
     addon_price = serializers.DecimalField(source="addon.base_price", max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model = SubmissionAddOn
-        fields = ["id", "addon", "addon_name", "addon_price", "quantity", "subtotal"]
+        fields = ["id", "addon", "addon_name", "addon_description", "addon_price", "quantity", "subtotal"]
 
 
 
