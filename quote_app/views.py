@@ -181,9 +181,13 @@ class SubmitServiceResponsesView(APIView):
     def post(self, request, submission_id, service_id):
 
         self.bid_in_person=False
-        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        # Optimize: Prefetch related objects to avoid N+1 queries
+        submission = get_object_or_404(
+            CustomerSubmission.objects.select_related('location', 'size_range'), 
+            id=submission_id
+        )
         service_selection = get_object_or_404(
-            CustomerServiceSelection, 
+            CustomerServiceSelection.objects.select_related('service', 'service__settings'), 
             submission=submission,
             service_id=service_id
         )
@@ -206,11 +210,33 @@ class SubmitServiceResponsesView(APIView):
                 # Process responses in dependency order (parents first, then children)
                 ordered_responses = self._order_responses_by_dependency(responses)
                 
+                # OPTIMIZATION: Prefetch all packages and related data once
+                packages = Package.objects.filter(service=service_selection.service, is_active=True).select_related('service')
+                
+                # OPTIMIZATION: Prefetch all sqft mappings for all packages at once
+                sqft_mappings = {}
+                if submission.size_range:
+                    sqft_mappings = {
+                        mapping.service_package_id: mapping.price
+                        for mapping in ServicePackageSizeMapping.objects.filter(
+                            service_package__in=packages,
+                            global_size=submission.size_range
+                        ).select_related('service_package', 'global_size')
+                    }
+                
+                # OPTIMIZATION: Prefetch all questions at once to avoid N+1 queries
+                question_ids = [r['question_id'] for r in ordered_responses]
+                questions_dict = {
+                    q.id: q for q in Question.objects.filter(id__in=question_ids).select_related('service')
+                }
+                
                 total_adjustment = Decimal('0.00')
                 
                 for response_data in ordered_responses:
                     question_id = response_data['question_id']
-                    question = get_object_or_404(Question, id=question_id)
+                    question = questions_dict.get(question_id)
+                    if not question:
+                        question = get_object_or_404(Question, id=question_id)
                     
                     # Create question response
                     question_response = CustomerQuestionResponse.objects.create(
@@ -223,9 +249,9 @@ class SubmitServiceResponsesView(APIView):
                     # Process response data and store related objects
                     self._process_question_response_data(question, response_data, question_response)
                     
-                    # Calculate pricing adjustment (for averaging only)
-                    question_adjustment = self._calculate_question_adjustment_for_averaging(
-                        question, response_data, question_response, service_selection
+                    # Calculate pricing adjustment (for averaging only) - optimized
+                    question_adjustment = self._calculate_question_adjustment_for_averaging_optimized(
+                        question, response_data, question_response, service_selection, packages, sqft_mappings
                     )
                     
                     question_response.price_adjustment = question_adjustment
@@ -238,8 +264,10 @@ class SubmitServiceResponsesView(APIView):
                 service_selection.save()
                 
                 surcharge_for_submission = False
-                # Generate package quotes for ALL packages
-                surcharge_applied, surcharge_price = self._generate_all_package_quotes(service_selection, submission)
+                # Generate package quotes for ALL packages - optimized
+                surcharge_applied, surcharge_price = self._generate_all_package_quotes_optimized(
+                    service_selection, submission, packages, sqft_mappings
+                )
                 
                 print("+++++++++++++surcharge_applied, surcharge_price++++++++++",surcharge_applied, surcharge_price)
                 if surcharge_applied:
@@ -250,8 +278,8 @@ class SubmitServiceResponsesView(APIView):
                     
                     
                 
-                # Check if all services have responses
-                all_services_completed = self._check_all_services_completed(submission)
+                # Check if all services have responses - optimized
+                all_services_completed = self._check_all_services_completed_optimized(submission)
                 if all_services_completed:
                     submission.status = 'responses_completed'
                     submission.save()
@@ -331,15 +359,47 @@ class SubmitServiceResponsesView(APIView):
         if not packages.exists():
             return Decimal('0.00')
         
+        # Prefetch sqft mappings
+        sqft_mappings = {}
+        if service_selection.submission.size_range:
+            sqft_mappings = {
+                mapping.service_package_id: mapping.price
+                for mapping in ServicePackageSizeMapping.objects.filter(
+                    service_package__in=packages,
+                    global_size=service_selection.submission.size_range
+                )
+            }
+        
+        return self._calculate_question_adjustment_for_averaging_optimized(
+            question, response_data, question_response, service_selection, packages, sqft_mappings
+        )
+    
+    def _calculate_question_adjustment_for_averaging_optimized(self, question, response_data, question_response, service_selection, packages, sqft_mappings):
+        """Calculate average adjustment across packages (for display only) - OPTIMIZED"""
+        if not packages.exists():
+            return Decimal('0.00')
+        
         total_adjustment = Decimal('0.00')
         package_count = 0
         
+        # Prefetch all pricing data for this question across all packages
+        question_pricings = {
+            qp.package_id: qp 
+            for qp in QuestionPricing.objects.filter(
+                question=question, 
+                package__in=packages
+            ).select_related('package', 'question')
+        }
+        
         for package in packages:
-            # Get package-specific sqft price
-            package_sqft_price = self._get_package_sqft_price(service_selection.submission, package)
+            # Get package-specific sqft price from pre-fetched dict
+            package_sqft_price = sqft_mappings.get(package.id, Decimal('0.00'))
             
-            package_adjustment = self._calculate_single_package_adjustment(
-                question, response_data, question_response, package, package_sqft_price
+            # Get pricing from pre-fetched dict
+            pricing = question_pricings.get(package.id)
+            
+            package_adjustment = self._calculate_single_package_adjustment_optimized(
+                question, response_data, question_response, package, package_sqft_price, pricing
             )
             total_adjustment += package_adjustment
             package_count += 1
@@ -362,13 +422,23 @@ class SubmitServiceResponsesView(APIView):
     
     def _calculate_single_package_adjustment(self, question, response_data, question_response, package, base_sqft_price):
         """Calculate adjustment for a single package"""
+        # Get pricing for this call
+        pricing = None
+        if question.question_type in ['yes_no', 'conditional'] and response_data.get('yes_no_answer') is True:
+            pricing = QuestionPricing.objects.filter(
+                question=question, package=package
+            ).first()
+        
+        return self._calculate_single_package_adjustment_optimized(
+            question, response_data, question_response, package, base_sqft_price, pricing
+        )
+    
+    def _calculate_single_package_adjustment_optimized(self, question, response_data, question_response, package, base_sqft_price, pricing=None):
+        """Calculate adjustment for a single package - OPTIMIZED"""
         package_adjustment = Decimal('0.00')
         
         if question.question_type == 'yes_no':
             if response_data.get('yes_no_answer') is True:
-                pricing = QuestionPricing.objects.filter(
-                    question=question, package=package
-                ).first()
                 if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     package_adjustment = self._apply_pricing_rule(
                         pricing.yes_pricing_type, pricing.yes_value,
@@ -390,9 +460,6 @@ class SubmitServiceResponsesView(APIView):
         elif question.question_type == 'conditional':
             # Handle conditional questions (same as yes_no for now)
             if response_data.get('yes_no_answer') is True:
-                pricing = QuestionPricing.objects.filter(
-                    question=question, package=package
-                ).first()
                 if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     package_adjustment = self._apply_pricing_rule(
                         pricing.yes_pricing_type, pricing.yes_value,
@@ -403,6 +470,24 @@ class SubmitServiceResponsesView(APIView):
     
     def _calculate_options_question_adjustment_from_stored(self, question_response, package, base_sqft_price):
         """Calculate adjustment for options question using stored responses (prevents duplication)"""
+        # Prefetch pricing for all options
+        option_ids = [opt_resp.option_id for opt_resp in question_response.option_responses.all()]
+        all_option_pricings = {}
+        if option_ids:
+            all_option_pricings = {
+                (op.option_id, op.package_id): op
+                for op in OptionPricing.objects.filter(
+                    option_id__in=option_ids,
+                    package=package
+                ).select_related('option', 'package')
+            }
+        
+        return self._calculate_options_question_adjustment_from_stored_optimized(
+            question_response, package, base_sqft_price, all_option_pricings
+        )
+    
+    def _calculate_options_question_adjustment_from_stored_optimized(self, question_response, package, base_sqft_price, all_option_pricings):
+        """Calculate adjustment for options question using stored responses (prevents duplication) - OPTIMIZED"""
         total_adjustment = Decimal('0.00')
         total_quantity = 0
         
@@ -413,9 +498,7 @@ class SubmitServiceResponsesView(APIView):
             quantity = option_response.quantity
             total_quantity += quantity
             
-            pricing = OptionPricing.objects.filter(
-                option=option, package=package
-            ).first()
+            pricing = all_option_pricings.get((option.id, package.id))
             
             if pricing and pricing.pricing_type not in ['ignore', 'fixed_price']:
                 base_adjustment = self._apply_pricing_rule(
@@ -443,6 +526,24 @@ class SubmitServiceResponsesView(APIView):
     
     def _calculate_sub_questions_adjustment_from_stored(self, question_response, package, base_sqft_price):
         """Calculate adjustment for multiple yes/no questions using stored responses"""
+        # Prefetch pricing for all sub-questions
+        sub_question_ids = [sub_resp.sub_question_id for sub_resp in question_response.sub_question_responses.all()]
+        all_sub_question_pricings = {}
+        if sub_question_ids:
+            all_sub_question_pricings = {
+                (sqp.sub_question_id, sqp.package_id): sqp
+                for sqp in SubQuestionPricing.objects.filter(
+                    sub_question_id__in=sub_question_ids,
+                    package=package
+                ).select_related('sub_question', 'package')
+            }
+        
+        return self._calculate_sub_questions_adjustment_from_stored_optimized(
+            question_response, package, base_sqft_price, all_sub_question_pricings
+        )
+    
+    def _calculate_sub_questions_adjustment_from_stored_optimized(self, question_response, package, base_sqft_price, all_sub_question_pricings):
+        """Calculate adjustment for multiple yes/no questions using stored responses - OPTIMIZED"""
         total_adjustment = Decimal('0.00')
         
         print(f"[DEBUG] Processing sub-questions from stored responses with base_sqft_price={base_sqft_price}")
@@ -451,11 +552,8 @@ class SubmitServiceResponsesView(APIView):
             if sub_response.answer:  # Only process True answers
                 sub_question = sub_response.sub_question
                 
-                # Get pricing for this sub-question and package
-                pricing = SubQuestionPricing.objects.filter(
-                    sub_question=sub_question, 
-                    package=package
-                ).first()
+                # Get pricing from pre-fetched dict
+                pricing = all_sub_question_pricings.get((sub_question.id, package.id))
                 
                 if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                     adjustment = self._apply_pricing_rule(
@@ -552,7 +650,24 @@ class SubmitServiceResponsesView(APIView):
     def _generate_all_package_quotes(self, service_selection, submission):
         """Generate quotes for ALL packages in the service with correct package-specific pricing"""
         service = service_selection.service
-        packages = Package.objects.filter(service=service, is_active=True)
+        packages = Package.objects.filter(service=service, is_active=True).select_related('service')
+        
+        # Prefetch sqft mappings
+        sqft_mappings = {}
+        if submission.size_range:
+            sqft_mappings = {
+                mapping.service_package_id: mapping.price
+                for mapping in ServicePackageSizeMapping.objects.filter(
+                    service_package__in=packages,
+                    global_size=submission.size_range
+                ).select_related('service_package', 'global_size')
+            }
+        
+        return self._generate_all_package_quotes_optimized(service_selection, submission, packages, sqft_mappings)
+    
+    def _generate_all_package_quotes_optimized(self, service_selection, submission, packages, sqft_mappings):
+        """Generate quotes for ALL packages in the service with correct package-specific pricing - OPTIMIZED"""
+        service = service_selection.service
         
         surcharge_applied = False
         surcharge_amount_applied = Decimal('0.00')
@@ -572,29 +687,96 @@ class SubmitServiceResponsesView(APIView):
         # Clear existing quotes for this service
         service_selection.package_quotes.all().delete()
         
+        # OPTIMIZATION: Prefetch all package features for all packages at once
+        all_package_features = PackageFeature.objects.filter(
+            package__in=packages
+        ).select_related('package', 'feature')
+        
+        # Organize features by package
+        features_by_package = {}
+        for pf in all_package_features:
+            package_id = pf.package_id
+            if package_id not in features_by_package:
+                features_by_package[package_id] = {'included': [], 'excluded': []}
+            if pf.is_included:
+                features_by_package[package_id]['included'].append(str(pf.feature.id))
+            else:
+                features_by_package[package_id]['excluded'].append(str(pf.feature.id))
+        
+        # OPTIMIZATION: Prefetch all question responses with related data at once
+        question_responses = service_selection.question_responses.all().prefetch_related(
+            'question',
+            'option_responses__option',
+            'sub_question_responses__sub_question'
+        )
+        
+        # OPTIMIZATION: Prefetch all pricing rules for all packages and questions
+        question_ids = [qr.question_id for qr in question_responses]
+        all_question_pricings = {}
+        if question_ids:
+            all_question_pricings = {
+                (qp.question_id, qp.package_id): qp
+                for qp in QuestionPricing.objects.filter(
+                    question_id__in=question_ids,
+                    package__in=packages
+                ).select_related('question', 'package')
+            }
+        
+        all_option_pricings = {}
+        all_sub_question_pricings = {}
+        
+        # Get all option IDs and sub-question IDs
+        option_ids = []
+        sub_question_ids = []
+        for qr in question_responses:
+            for opt_resp in qr.option_responses.all():
+                option_ids.append(opt_resp.option_id)
+            for sub_resp in qr.sub_question_responses.all():
+                sub_question_ids.append(sub_resp.sub_question_id)
+        
+        if option_ids:
+            all_option_pricings = {
+                (op.option_id, op.package_id): op
+                for op in OptionPricing.objects.filter(
+                    option_id__in=option_ids,
+                    package__in=packages
+                ).select_related('option', 'package')
+            }
+        
+        if sub_question_ids:
+            all_sub_question_pricings = {
+                (sqp.sub_question_id, sqp.package_id): sqp
+                for sqp in SubQuestionPricing.objects.filter(
+                    sub_question_id__in=sub_question_ids,
+                    package__in=packages
+                ).select_related('sub_question', 'package')
+            }
+        
         # Generate quotes for each package
         for package in packages:
             base_price = package.base_price
             
-            # Get package-specific sqft price
-            sqft_price = self._get_package_sqft_price(submission, package)
+            # Get package-specific sqft price from pre-fetched dict
+            sqft_price = sqft_mappings.get(package.id, Decimal('0.00'))
             
-            # Calculate package-specific question adjustments
-            question_adjustments = self._calculate_package_specific_adjustments_new(
-                service_selection, package, sqft_price
+            # Calculate package-specific question adjustments - optimized
+            question_adjustments = self._calculate_package_specific_adjustments_new_optimized(
+                question_responses, package, sqft_price, 
+                all_question_pricings, all_option_pricings, all_sub_question_pricings
             )
 
             # New total logic:
             # - Compute the quoted total WITHOUT base_price
             # - If quoted total is below the package base_price, use base_price
             # - Otherwise, do not add base_price again
-            quoted_total = sqft_price + question_adjustments
+            # - Include surcharge in the total
+            quoted_total = sqft_price + question_adjustments + surcharge_amount_applied
             total_price = base_price if quoted_total < base_price else quoted_total
             
-            # Get package features
-            package_features = PackageFeature.objects.filter(package=package).select_related('feature')
-            included_features = [str(pf.feature.id) for pf in package_features if pf.is_included]
-            excluded_features = [str(pf.feature.id) for pf in package_features if not pf.is_included]
+            # Get package features from pre-fetched dict
+            package_features_data = features_by_package.get(package.id, {'included': [], 'excluded': []})
+            included_features = package_features_data['included']
+            excluded_features = package_features_data['excluded']
             
             CustomerPackageQuote.objects.create(
                 service_selection=service_selection,
@@ -602,7 +784,7 @@ class SubmitServiceResponsesView(APIView):
                 base_price=base_price,
                 sqft_price=sqft_price,
                 question_adjustments=question_adjustments,
-                surcharge_amount=Decimal('0.00'),
+                surcharge_amount=surcharge_amount_applied,  # Store actual surcharge amount
                 total_price=total_price,
                 included_features=included_features,
                 excluded_features=excluded_features,
@@ -613,18 +795,71 @@ class SubmitServiceResponsesView(APIView):
     
     def _calculate_package_specific_adjustments_new(self, service_selection, package, base_sqft_price):
         """Calculate question adjustments specific to a package with package-specific sqft pricing"""
+        # Fallback to optimized version with prefetching
+        question_responses = service_selection.question_responses.all().prefetch_related(
+            'question',
+            'option_responses__option',
+            'sub_question_responses__sub_question'
+        )
+        
+        # Prefetch pricing data
+        question_ids = [qr.question_id for qr in question_responses]
+        all_question_pricings = {}
+        if question_ids:
+            all_question_pricings = {
+                (qp.question_id, qp.package_id): qp
+                for qp in QuestionPricing.objects.filter(
+                    question_id__in=question_ids,
+                    package=package
+                ).select_related('question', 'package')
+            }
+        
+        option_ids = []
+        sub_question_ids = []
+        for qr in question_responses:
+            for opt_resp in qr.option_responses.all():
+                option_ids.append(opt_resp.option_id)
+            for sub_resp in qr.sub_question_responses.all():
+                sub_question_ids.append(sub_resp.sub_question_id)
+        
+        all_option_pricings = {}
+        if option_ids:
+            all_option_pricings = {
+                (op.option_id, op.package_id): op
+                for op in OptionPricing.objects.filter(
+                    option_id__in=option_ids,
+                    package=package
+                ).select_related('option', 'package')
+            }
+        
+        all_sub_question_pricings = {}
+        if sub_question_ids:
+            all_sub_question_pricings = {
+                (sqp.sub_question_id, sqp.package_id): sqp
+                for sqp in SubQuestionPricing.objects.filter(
+                    sub_question_id__in=sub_question_ids,
+                    package=package
+                ).select_related('sub_question', 'package')
+            }
+        
+        return self._calculate_package_specific_adjustments_new_optimized(
+            question_responses, package, base_sqft_price,
+            all_question_pricings, all_option_pricings, all_sub_question_pricings
+        )
+    
+    def _calculate_package_specific_adjustments_new_optimized(self, question_responses, package, base_sqft_price, 
+                                                               all_question_pricings, all_option_pricings, all_sub_question_pricings):
+        """Calculate question adjustments specific to a package with package-specific sqft pricing - OPTIMIZED"""
         total_adjustment = Decimal('0.00')
         
         print(f"[DEBUG] Calculating adjustments for package {package.id} ({package.name}) with package_sqft_price={base_sqft_price}")
         
-        for question_response in service_selection.question_responses.all():
+        for question_response in question_responses:
             question = question_response.question
             
             if question.question_type == 'yes_no':
                 if question_response.yes_no_answer is True:
-                    pricing = QuestionPricing.objects.filter(
-                        question=question, package=package
-                    ).first()
+                    pricing = all_question_pricings.get((question.id, package.id))
                     if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                         adjustment = self._apply_pricing_rule(
                             pricing.yes_pricing_type, pricing.yes_value,
@@ -638,24 +873,22 @@ class SubmitServiceResponsesView(APIView):
                         
             
             elif question.question_type in ['describe', 'quantity']:
-                adjustment = self._calculate_options_question_adjustment_from_stored(
-                    question_response, package, base_sqft_price
+                adjustment = self._calculate_options_question_adjustment_from_stored_optimized(
+                    question_response, package, base_sqft_price, all_option_pricings
                 )
                 print(f"[DEBUG] Options question {question.id} adjustment for package {package.id}: {adjustment}")
                 total_adjustment += adjustment
             
             elif question.question_type == 'multiple_yes_no':
-                adjustment = self._calculate_sub_questions_adjustment_from_stored(
-                    question_response, package, base_sqft_price
+                adjustment = self._calculate_sub_questions_adjustment_from_stored_optimized(
+                    question_response, package, base_sqft_price, all_sub_question_pricings
                 )
                 print(f"[DEBUG] Multi yes/no question {question.id} adjustment for package {package.id}: {adjustment}")
                 total_adjustment += adjustment
             
             elif question.question_type == 'conditional':
                 if question_response.yes_no_answer is True:
-                    pricing = QuestionPricing.objects.filter(
-                        question=question, package=package
-                    ).first()
+                    pricing = all_question_pricings.get((question.id, package.id))
                     if pricing and pricing.yes_pricing_type not in ['ignore', 'fixed_price']:
                         adjustment = self._apply_pricing_rule(
                             pricing.yes_pricing_type, pricing.yes_value,
@@ -760,19 +993,53 @@ class SubmitServiceResponsesView(APIView):
 
     def _check_all_services_completed(self, submission):
         """Check if all selected services have responses"""
-        service_selections = submission.customerserviceselection_set.all()
+        return self._check_all_services_completed_optimized(submission)
+    
+    def _check_all_services_completed_optimized(self, submission):
+        """Check if all selected services have responses - OPTIMIZED"""
+        service_selections = submission.customerserviceselection_set.all().prefetch_related(
+            'question_responses__question',
+            'service'
+        )
+        
+        # OPTIMIZATION: Prefetch all root questions for all services at once
+        service_ids = [ss.service_id for ss in service_selections]
+        all_root_questions = Question.objects.filter(
+            service_id__in=service_ids,
+            is_active=True,
+            parent_question__isnull=True
+        ).select_related('service')
+        
+        # Organize questions by service
+        root_questions_by_service = {}
+        for q in all_root_questions:
+            service_id = q.service_id
+            if service_id not in root_questions_by_service:
+                root_questions_by_service[service_id] = []
+            root_questions_by_service[service_id].append(q)
+        
+        # OPTIMIZATION: Prefetch all conditional questions at once
+        root_question_ids = [q.id for q in all_root_questions]
+        all_conditional_questions = Question.objects.filter(
+            parent_question_id__in=root_question_ids,
+            is_active=True
+        ).select_related('parent_question', 'service')
+        
+        # Organize conditional questions by parent
+        conditional_questions_by_parent = {}
+        for q in all_conditional_questions:
+            parent_id = q.parent_question_id
+            if parent_id not in conditional_questions_by_parent:
+                conditional_questions_by_parent[parent_id] = []
+            conditional_questions_by_parent[parent_id].append(q)
         
         for selection in service_selections:
             # Check if this service has any question responses
             if not selection.question_responses.exists():
                 return False
             
-            # Get all root questions (non-conditional) for this service
-            root_questions = Question.objects.filter(
-                service=selection.service,
-                is_active=True,
-                parent_question__isnull=True
-            )
+            # Get root questions for this service from pre-fetched dict
+            root_questions = root_questions_by_service.get(selection.service_id, [])
             
             # Check if all root questions have responses
             answered_question_ids = set(
@@ -783,11 +1050,8 @@ class SubmitServiceResponsesView(APIView):
                 if root_question.id not in answered_question_ids:
                     return False
                 
-                # Check conditional questions if they should be answered
-                conditional_questions = Question.objects.filter(
-                    parent_question=root_question,
-                    is_active=True
-                )
+                # Get conditional questions from pre-fetched dict
+                conditional_questions = conditional_questions_by_parent.get(root_question.id, [])
                 
                 for conditional_question in conditional_questions:
                     # Check if condition is met
@@ -992,9 +1256,9 @@ class SubmitFinalQuoteView(APIView):
                 total_base_price += selected_quote.base_price
                 total_sqft_price += selected_quote.sqft_price
                 total_adjustments += selected_quote.question_adjustments
-                # Use computed package total (with base-price-minimum logic applied)
+                # Use computed package total (with base-price-minimum logic applied and surcharge included)
                 total_services_price += selected_quote.total_price
-                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, package_total={selected_quote.total_price}")
+                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.total_price}")
         
         # # Calculate add-ons total
         # if submission.addons.exists():
@@ -1016,10 +1280,12 @@ class SubmitFinalQuoteView(APIView):
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
 
         
-        # Final total uses package totals (which already enforce base price minimum) + surcharges + add-ons
-        final_total = total_services_price + submission.total_surcharges + total_addons_price
+        # Final total uses package totals (which already enforce base price minimum and include surcharges) + add-ons
+        # NOTE: Do NOT add submission.total_surcharges again since surcharges are already included in each package total
+        final_total = total_services_price + total_addons_price
         
-        print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + surcharges={submission.total_surcharges} + addons={total_addons_price} = {final_total}")
+        print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + addons={total_addons_price} = {final_total}")
+        print(f"[DEBUG] Note: Surcharges are already included in package totals, so not added separately")
 
 
         if submission.applied_coupon and submission.applied_coupon.is_valid():
@@ -1328,7 +1594,8 @@ class EditServiceResponsesView(APIView):
                 total_adjustments += selected_quote.question_adjustments
                 total_services_price += selected_quote.total_price
                 print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
-                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, package_total={selected_quote.total_price}")
+                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, "
+                      f"surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.total_price}")
         
         submission_addons = submission.submission_addons.select_related("addon")
         for sub_addon in submission_addons:
@@ -1337,7 +1604,8 @@ class EditServiceResponsesView(APIView):
         
         print(f"[DEBUG] Total add-ons price: {total_addons_price}")
         
-        pre_discount_total = (total_services_price + submission.total_surcharges + total_addons_price)
+        # NOTE: Do NOT add submission.total_surcharges again since surcharges are already included in each package total
+        pre_discount_total = (total_services_price + total_addons_price)
         
         final_total = pre_discount_total
         if submission.applied_coupon and submission.applied_coupon.is_valid():
