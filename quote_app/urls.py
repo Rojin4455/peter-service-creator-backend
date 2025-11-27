@@ -56,7 +56,8 @@ urlpatterns = [
 
 
     path("coupons/", views.CouponListView.as_view(), name="coupon-list"),
-    path("coupons/<str:code>/", views.CouponDetailView.as_view(), name="coupon-detail"),
+    path("coupons/global/", views.GlobalCouponListView.as_view(), name="global-coupons-list"),
     path("coupons/apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
     path("coupons-apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
+    path("coupons/<str:code>/", views.CouponDetailView.as_view(), name="coupon-detail"),
 ]

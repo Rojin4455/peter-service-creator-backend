@@ -2170,3 +2170,16 @@ class ApplyCouponView(APIView):
             "coupon": CouponSerializer(coupon).data,
             "submission_id": str(submission.id),
         }, status=status.HTTP_200_OK)
+
+
+# ✅ Get only global coupons
+class GlobalCouponListView(generics.ListAPIView):
+    """View to fetch only global coupons - accessible by anyone"""
+    serializer_class = CouponSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return Coupon.objects.filter(
+            is_global=True,
+            is_active=True
+        ).order_by("-created_at")

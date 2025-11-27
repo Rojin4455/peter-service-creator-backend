@@ -1278,7 +1278,21 @@ class CouponViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-    
+
+
+class GlobalCouponListView(APIView):
+    """View to fetch all global coupons - accessible by anyone"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """Get all active global coupons"""
+        global_coupons = Coupon.objects.filter(
+            is_global=True,
+            is_active=True
+        ).order_by("-created_at")
+        
+        serializer = CouponSerializer(global_coupons, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 

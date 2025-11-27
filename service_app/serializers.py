@@ -769,6 +769,7 @@ class CouponSerializer(serializers.ModelSerializer):
             "expiration_date",
             "used_count",
             "is_active",
+            "is_global",
             "created_at",
             "updated_at",
         ]

@@ -148,5 +148,7 @@ urlpatterns = [
     path('monthly-analytics/',views. MonthlyAnalyticsAPIView.as_view(), name='monthly-analytics'),
     path('yearly-analytics/', views.YearlyAnalyticsAPIView.as_view(), name='yearly-analytics'),
 
+    # Global coupons endpoint (AllowAny - accessible by anyone)
+    path('coupons/global/', views.GlobalCouponListView.as_view(), name='global-coupons-list'),
 
 ]+ router.urls

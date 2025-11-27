@@ -669,6 +669,7 @@ class Coupon(models.Model):
     expiration_date = models.DateTimeField(null=True, blank=True)
     used_count = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    is_global = models.BooleanField(default=False, help_text="If True, this coupon can be used by all users.")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
