@@ -68,7 +68,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         custom_fields.append({
             "id":"7l7boV5mtUDWnhIocfae",
-            "field_value":submission.final_total
+            "field_value":str(submission.final_total)
         })
 
         
