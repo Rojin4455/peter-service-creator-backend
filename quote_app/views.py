@@ -281,7 +281,7 @@ class SubmitServiceResponsesView(APIView):
                 # Check if all services have responses - optimized
                 all_services_completed = self._check_all_services_completed_optimized(submission)
                 if all_services_completed:
-                    submission.status = 'responses_completed'
+                    submission.status = 'submitted'
                     submission.save()
                 if surcharge_for_submission:
                     submission.quote_surcharge_applicable = True
@@ -1133,7 +1133,7 @@ class SubmitFinalQuoteView(APIView):
         if submission.status == 'packages_selected':
             # Packages already selected, just need final confirmation
             serializer = SubmitFinalQuoteSerializer(data=request.data)
-        elif submission.status == 'draft' or submission.status == 'responses_completed':
+        elif submission.status == 'draft' or submission.status == 'submitted':
             # Need to select packages first, then submit
             serializer = SubmitFinalQuoteSerializer(data=request.data)
             # if not request.data.get('selected_packages'):
@@ -1155,7 +1155,7 @@ class SubmitFinalQuoteView(APIView):
                     self._update_package_selections(submission, serializer.validated_data['selected_packages'])
                 
                 # Update submission with additional information
-                submission.status = 'submitted'
+                submission.status = 'approved'
                 
                 # Store additional submission details
                 additional_data = {
@@ -1338,7 +1338,7 @@ class EditServiceResponsesView(APIView):
         
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         
-        # Verify submission is in submitted state
+        # Verify submission is in submitted state (after responses completed, before final approval)
         if submission.status != 'submitted':
             return Response({
                 'error': 'Can only edit responses for submitted quotes'
@@ -1808,7 +1808,7 @@ class SelectPackagesView(APIView):
     def post(self, request, submission_id):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         
-        if submission.status != 'responses_completed':
+        if submission.status != 'submitted':
             return Response({
                 'error': 'Cannot select packages. Complete service responses first.'
             }, status=status.HTTP_400_BAD_REQUEST)

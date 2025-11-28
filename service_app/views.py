@@ -1348,44 +1348,44 @@ class DashboardAPIView(APIView):
         # 1. OVERALL STATISTICS
         total_submissions = queryset.count()
         
-        # Total worth (sum of final_total for submitted status)
+        # Total worth (sum of final_total for approved status)
         total_worth = queryset.filter(
-            status='submitted'
+            status='approved'
         ).aggregate(
             total=Sum('final_total')
         )['total'] or Decimal('0.00')
         
         # Average order value
         avg_order_value = queryset.filter(
-            status='submitted'
+            status='approved'
         ).aggregate(
             avg=Sum('final_total')
         )['avg'] or Decimal('0.00')
         
-        if queryset.filter(status='submitted').count() > 0:
-            avg_order_value = avg_order_value / queryset.filter(status='submitted').count()
+        if queryset.filter(status='approved').count() > 0:
+            avg_order_value = avg_order_value / queryset.filter(status='approved').count()
         
         # Status counts
         status_counts = queryset.values('status').annotate(
             count=Count('id')
         ).order_by('-count')
         
-        # Conversion rate (submitted / total)
-        submitted_count = queryset.filter(status='submitted').count()
-        conversion_rate = (submitted_count / total_submissions * 100) if total_submissions > 0 else 0
+        # Conversion rate (approved / total)
+        approved_count = queryset.filter(status='approved').count()
+        conversion_rate = (approved_count / total_submissions * 100) if total_submissions > 0 else 0
         
         # 2. HEARD ABOUT US BREAKDOWN (Pie Chart Data)
         heard_about_data = queryset.exclude(
             Q(heard_about_us__isnull=True) | Q(heard_about_us='')
         ).values('heard_about_us').annotate(
             total_count=Count('id'),
-            submitted_count=Count('id', filter=Q(status='submitted')),
+            approved_count=Count('id', filter=Q(status='approved')),
             draft_count=Count('id', filter=Q(status='draft')),
-            responses_completed_count=Count('id', filter=Q(status='responses_completed')),
+            submitted_count=Count('id', filter=Q(status='submitted')),
             packages_selected_count=Count('id', filter=Q(status='packages_selected')),
             declined_count=Count('id', filter=Q(status='declined')),
             expired_count=Count('id', filter=Q(status='expired')),
-            total_value=Sum('final_total', filter=Q(status='submitted'))
+            total_value=Sum('final_total', filter=Q(status='approved'))
         ).order_by('-total_count')
         
         # Format heard about us data
@@ -1394,9 +1394,9 @@ class DashboardAPIView(APIView):
             heard_about_chart.append({
                 'source': item['heard_about_us'],
                 'total': item['total_count'],
-                'submitted': item['submitted_count'],
+                'approved': item['approved_count'],
                 'draft': item['draft_count'],
-                'responses_completed': item['responses_completed_count'],
+                'submitted': item['submitted_count'],
                 'packages_selected': item['packages_selected_count'],
                 'declined': item['declined_count'],
                 'expired': item['expired_count'],
@@ -1413,8 +1413,8 @@ class DashboardAPIView(APIView):
             month=TruncMonth('created_at')
         ).values('month').annotate(
             total_submissions=Count('id'),
-            total_revenue=Sum('final_total', filter=Q(status='submitted')),
-            submitted_orders=Count('id', filter=Q(status='submitted')),
+            total_revenue=Sum('final_total', filter=Q(status='approved')),
+            approved_orders=Count('id', filter=Q(status='approved')),
             draft_orders=Count('id', filter=Q(status='draft')),
             declined_orders=Count('id', filter=Q(status='declined'))
         ).order_by('month')
@@ -1426,7 +1426,7 @@ class DashboardAPIView(APIView):
                 'month': item['month'].strftime('%Y-%m'),
                 'month_name': item['month'].strftime('%B %Y'),
                 'total_submissions': item['total_submissions'],
-                'submitted_orders': item['submitted_orders'],
+                'approved_orders': item['approved_orders'],
                 'draft_orders': item['draft_orders'],
                 'declined_orders': item['declined_orders'],
                 'revenue': float(item['total_revenue'] or 0)
@@ -1441,7 +1441,7 @@ class DashboardAPIView(APIView):
             day=TruncDate('created_at')
         ).values('day').annotate(
             submissions=Count('id'),
-            revenue=Sum('final_total', filter=Q(status='submitted'))
+            revenue=Sum('final_total', filter=Q(status='approved'))
         ).order_by('day')
         
         daily_trend = []
@@ -1457,7 +1457,7 @@ class DashboardAPIView(APIView):
             property_type__isnull=True
         ).values('property_type').annotate(
             count=Count('id'),
-            revenue=Sum('final_total', filter=Q(status='submitted'))
+            revenue=Sum('final_total', filter=Q(status='approved'))
         ).order_by('-count')
         
         property_type_breakdown = []
@@ -1498,7 +1498,7 @@ class DashboardAPIView(APIView):
                 'total_worth': float(total_worth),
                 'average_order_value': float(avg_order_value),
                 'conversion_rate': round(conversion_rate, 2),
-                'submitted_count': submitted_count,
+                'approved_count': approved_count,
                 'status_breakdown': list(status_counts)
             },
             'charts': {
@@ -1521,7 +1521,7 @@ class PaginatedSubmissionsList(APIView):
     Query Params:
         ?page=1
         ?page_size=20
-        ?status=submitted
+        ?status=approved
         ?search=John
     """
     permission_classes = [IsAuthenticated]
@@ -1595,26 +1595,26 @@ class LeadSourceAnalyticsAPIView(APIView):
             Q(heard_about_us__isnull=True) | Q(heard_about_us='')
         ).values('heard_about_us').annotate(
             num_of_leads=Count('id'),
-            num_submitted=Count('id', filter=Q(status='submitted')),
-            total_booked=Sum('final_total', filter=Q(status='submitted')),
-            avg_ticket=Sum('final_total', filter=Q(status='submitted'))
+            num_approved=Count('id', filter=Q(status='approved')),
+            total_booked=Sum('final_total', filter=Q(status='approved')),
+            avg_ticket=Sum('final_total', filter=Q(status='approved'))
         ).order_by('-num_of_leads')
         
         # Format the data
         analytics_data = []
         for item in lead_source_data:
             num_leads = item['num_of_leads']
-            num_submitted = item['num_submitted'] or 0
+            num_approved = item['num_approved'] or 0
             total_booked = item['total_booked'] or Decimal('0.00')
             
             # Calculate percentage of leads
             percentage_of_leads = (num_leads / total_leads * 100) if total_leads > 0 else 0
             
             # Calculate close rate (conversion rate)
-            close_rate = (num_submitted / num_leads * 100) if num_leads > 0 else 0
+            close_rate = (num_approved / num_leads * 100) if num_leads > 0 else 0
             
             # Calculate average ticket
-            avg_ticket = (total_booked / num_submitted) if num_submitted > 0 else Decimal('0.00')
+            avg_ticket = (total_booked / num_approved) if num_approved > 0 else Decimal('0.00')
             
             analytics_data.append({
                 'leadsource': item['heard_about_us'],
@@ -1628,27 +1628,27 @@ class LeadSourceAnalyticsAPIView(APIView):
         # Calculate totals
         total_summary = {
             'total_leads': total_leads,
-            'total_submitted': queryset.filter(status='submitted').count(),
+            'total_approved': queryset.filter(status='approved').count(),
             'overall_close_rate': round(
-                (queryset.filter(status='submitted').count() / total_leads * 100) if total_leads > 0 else 0,
+                (queryset.filter(status='approved').count() / total_leads * 100) if total_leads > 0 else 0,
                 1
             ),
             'total_revenue': float(
-                queryset.filter(status='submitted').aggregate(
+                queryset.filter(status='approved').aggregate(
                     total=Sum('final_total')
                 )['total'] or Decimal('0.00')
             ),
             'overall_avg_ticket': float(
-                queryset.filter(status='submitted').aggregate(
+                queryset.filter(status='approved').aggregate(
                     avg=Sum('final_total')
                 )['avg'] or Decimal('0.00')
             )
         }
         
         # Calculate overall average ticket properly
-        if total_summary['total_submitted'] > 0:
+        if total_summary['total_approved'] > 0:
             total_summary['overall_avg_ticket'] = round(
-                total_summary['total_revenue'] / total_summary['total_submitted'],
+                total_summary['total_revenue'] / total_summary['total_approved'],
                 2
             )
         
@@ -1672,7 +1672,7 @@ class MonthlyAnalyticsAPIView(APIView):
     Monthly analytics endpoint that returns:
     - Monthly breakdown by year
     - Number of bids per month
-    - Closed bids (submitted status)
+    - Closed bids (approved status)
     - Close rate
     - Total amount booked
     - Average ticket value
@@ -1707,8 +1707,8 @@ class MonthlyAnalyticsAPIView(APIView):
             month=TruncMonth('created_at')
         ).values('month').annotate(
             num_of_bids=Count('id'),
-            closed_bids=Count('id', filter=Q(status='submitted')),
-            total_booked=Sum('final_total', filter=Q(status='submitted'))
+            closed_bids=Count('id', filter=Q(status='approved')),
+            total_booked=Sum('final_total', filter=Q(status='approved'))
         ).order_by('-month')
         
         # Format the data
@@ -1737,8 +1737,8 @@ class MonthlyAnalyticsAPIView(APIView):
         # Calculate year totals
         year_totals = queryset.aggregate(
             total_bids=Count('id'),
-            total_closed=Count('id', filter=Q(status='submitted')),
-            total_revenue=Sum('final_total', filter=Q(status='submitted'))
+            total_closed=Count('id', filter=Q(status='approved')),
+            total_revenue=Sum('final_total', filter=Q(status='approved'))
         )
         
         total_closed = year_totals['total_closed'] or 0
@@ -1793,8 +1793,8 @@ class YearlyAnalyticsAPIView(APIView):
                 month=TruncMonth('created_at')
             ).values('month').annotate(
                 num_of_bids=Count('id'),
-                closed_bids=Count('id', filter=Q(status='submitted')),
-                total_booked=Sum('final_total', filter=Q(status='submitted'))
+                closed_bids=Count('id', filter=Q(status='approved')),
+                total_booked=Sum('final_total', filter=Q(status='approved'))
             ).order_by('-month')
             
             # Format monthly data
@@ -1820,8 +1820,8 @@ class YearlyAnalyticsAPIView(APIView):
             # Year summary
             year_totals = queryset.aggregate(
                 total_bids=Count('id'),
-                total_closed=Count('id', filter=Q(status='submitted')),
-                total_revenue=Sum('final_total', filter=Q(status='submitted'))
+                total_closed=Count('id', filter=Q(status='approved')),
+                total_revenue=Sum('final_total', filter=Q(status='approved'))
             )
             
             total_closed = year_totals['total_closed'] or 0

@@ -8,9 +8,9 @@ class CustomerSubmission(models.Model):
     """Main customer submission model (revamped)"""
     STATUS_CHOICES = [
         ('draft', 'Draft'),
-        ('responses_completed', 'Responses Completed'),
-        ('packages_selected', 'Packages Selected'),
         ('submitted', 'Submitted'),
+        ('packages_selected', 'Packages Selected'),
+        ('approved', 'Approved'),
         ('declined', 'Declined'),
         ('expired', 'Expired'),
     ]
