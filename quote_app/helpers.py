@@ -66,6 +66,11 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                 "field_value": quoted_date_value
             })
 
+        custom_fields.append({
+            "id":"7l7boV5mtUDWnhIocfae",
+            "field_value":submission.final_total
+        })
+
         
 
         if is_declined:
