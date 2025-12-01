@@ -252,7 +252,7 @@ class SubmitServiceResponsesView(APIView):
                     
                     # Calculate pricing adjustment (for averaging only) - optimized
                     question_adjustment = self._calculate_question_adjustment_for_averaging(
-                        question, response_data, question_response, service_selection, packages, sqft_mappings
+                        question, response_data, question_response, service_selection
                     )
                     
                     question_response.price_adjustment = question_adjustment
@@ -392,7 +392,7 @@ class SubmitServiceResponsesView(APIView):
             }
         
         return self._calculate_question_adjustment_for_averaging(
-            question, response_data, question_response, service_selection, packages, sqft_mappings
+            question, response_data, question_response, service_selection
         )
     
     def _calculate_question_adjustment_for_averaging_optimized(self, question, response_data, question_response, service_selection, packages, sqft_mappings):
