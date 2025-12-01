@@ -1747,6 +1747,18 @@ class EditServiceResponsesView(APIView):
             self, question, response_data, question_response, service_selection
         )
     
+    def _calculate_question_adjustment_for_averaging_optimized(self, question, response_data, question_response, service_selection, packages, sqft_mappings):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_question_adjustment_for_averaging_optimized(
+            self, question, response_data, question_response, service_selection, packages, sqft_mappings
+        )
+    
+    def _calculate_single_package_adjustment_optimized(self, question, response_data, question_response, package, base_sqft_price, pricing=None):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_single_package_adjustment_optimized(
+            self, question, response_data, question_response, package, base_sqft_price, pricing
+        )
+    
     def _get_package_sqft_price(self, submission, package):
         """Reuse from SubmitServiceResponsesView"""
         return SubmitServiceResponsesView._get_package_sqft_price(self, submission, package)
@@ -1763,10 +1775,28 @@ class EditServiceResponsesView(APIView):
             self, question_response, package, base_sqft_price
         )
     
+    def _calculate_options_question_adjustment_from_stored_optimized(self, question_response, package, base_sqft_price, all_option_pricings):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_options_question_adjustment_from_stored_optimized(
+            self, question_response, package, base_sqft_price, all_option_pricings
+        )
+    
     def _calculate_sub_questions_adjustment_from_stored(self, question_response, package, base_sqft_price):
         """Reuse from SubmitServiceResponsesView"""
         return SubmitServiceResponsesView._calculate_sub_questions_adjustment_from_stored(
             self, question_response, package, base_sqft_price
+        )
+    
+    def _calculate_sub_questions_adjustment_from_stored_optimized(self, question_response, package, base_sqft_price, all_sub_question_pricings):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_sub_questions_adjustment_from_stored_optimized(
+            self, question_response, package, base_sqft_price, all_sub_question_pricings
+        )
+    
+    def _calculate_measurement_question_adjustment(self, question_response, package):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_measurement_question_adjustment(
+            self, question_response, package
         )
     
     def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
