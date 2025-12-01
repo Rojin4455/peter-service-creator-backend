@@ -391,8 +391,9 @@ class SubmitServiceResponsesView(APIView):
                 )
             }
         
-        return self._calculate_question_adjustment_for_averaging(
-            question, response_data, question_response, service_selection
+        # FIX: Call the optimized version instead of calling itself recursively
+        return self._calculate_question_adjustment_for_averaging_optimized(
+            question, response_data, question_response, service_selection, packages, sqft_mappings
         )
     
     def _calculate_question_adjustment_for_averaging_optimized(self, question, response_data, question_response, service_selection, packages, sqft_mappings):
