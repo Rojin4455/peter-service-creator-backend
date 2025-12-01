@@ -303,7 +303,8 @@ class QuestionSerializer(serializers.ModelSerializer):
             'condition_answer', 'condition_option', 'condition_option_text',
             'question_text', 'question_type', 'order', 'is_active','image',
             'created_at', 'updated_at', 'options', 'sub_questions', 
-            'child_questions', 'pricing_rules', 'is_conditional', 'is_parent'
+            'child_questions', 'pricing_rules', 'is_conditional', 'is_parent',
+            'measurement_unit', 'allow_quantity', 'max_measurements'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'is_conditional', 'is_parent']
 
@@ -313,7 +314,7 @@ class QuestionSerializer(serializers.ModelSerializer):
         return QuestionSerializer(child_questions, many=True, context=self.context).data
 
     def get_pricing_rules(self, obj):
-        if obj.question_type in ['yes_no', 'conditional']:
+        if obj.question_type in ['yes_no', 'conditional', 'measurement']:
             return QuestionPricingSerializer(obj.pricing_rules, many=True).data
         elif obj.question_type in ['describe', 'quantity']:
             all_option_pricing = OptionPricing.objects.filter(option__in=obj.options.all())
@@ -395,7 +396,8 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         fields = [
             'service', 'parent_question', 'condition_answer', 'condition_option',
             'question_text', 'question_type', 'order', 'is_active', 
-            'options', 'sub_questions',"id",'image'
+            'options', 'sub_questions',"id",'image',
+            'measurement_unit', 'allow_quantity', 'max_measurements'
         ]
 
 
@@ -429,13 +431,21 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
             )
 
         # Validate question type requirements
-        if question_type in ['describe', 'quantity']:
+        if question_type in ['describe', 'quantity', 'measurement']:
             # Check both incoming data and existing DB options
             existing_options = self.instance.options.exists() if self.instance else False
             if options is None and not existing_options:  # only fail if neither exists
                 raise serializers.ValidationError(
                     f"{question_type} questions must have options"
                 )
+            
+            # Additional validation for measurement questions
+            if question_type == 'measurement':
+                measurement_unit = data.get('measurement_unit') or getattr(self.instance, "measurement_unit", None)
+                if not measurement_unit:
+                    raise serializers.ValidationError(
+                        "Measurement questions must have a measurement_unit specified"
+                    )
 
         if question_type == 'multiple_yes_no':
             existing_subs = self.instance.sub_questions.exists() if self.instance else False

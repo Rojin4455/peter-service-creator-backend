@@ -817,6 +817,46 @@ class PricingCalculatorView(APIView):
                                         'value': pricing.yes_value
                                     })
 
+                    elif question.question_type == 'measurement':
+                        measurements = response.get('measurements', [])
+                        pricing = QuestionPricing.objects.filter(
+                            question=question, package_id=package_id
+                        ).first()
+                        
+                        if pricing and pricing.yes_pricing_type == 'upcharge_percent' and pricing.value_type == 'amount':
+                            measurement_breakdown = []
+                            for measurement_data in measurements:
+                                option_id = measurement_data.get('option_id')
+                                length = Decimal(str(measurement_data.get('length', 0)))
+                                width = Decimal(str(measurement_data.get('width', 0)))
+                                quantity = measurement_data.get('quantity', 1)
+                                
+                                if length > 0 and width > 0:
+                                    area = length * width
+                                    row_total = area * Decimal(str(quantity)) * pricing.yes_value
+                                    question_adjustment += row_total
+                                    
+                                    # Get option text for breakdown
+                                    option_text = "Unknown"
+                                    if option_id:
+                                        try:
+                                            option = QuestionOption.objects.get(id=option_id)
+                                            option_text = option.option_text
+                                        except QuestionOption.DoesNotExist:
+                                            pass
+                                    
+                                    measurement_breakdown.append({
+                                        'option_id': option_id,
+                                        'option_text': option_text,
+                                        'length': float(length),
+                                        'width': float(width),
+                                        'quantity': quantity,
+                                        'area': float(area),
+                                        'row_total': float(row_total)
+                                    })
+                            
+                            question_breakdown['adjustments'] = measurement_breakdown
+
                     total_adjustment += question_adjustment
                     question_breakdown['total_adjustment'] = question_adjustment
                     breakdown.append(question_breakdown)

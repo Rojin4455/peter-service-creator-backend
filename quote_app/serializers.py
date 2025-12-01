@@ -8,7 +8,8 @@ from service_app.models import (
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote,SubmissionAddOn,CustomerAvailability
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerMeasurementResponse,
+    CustomerPackageQuote,SubmissionAddOn,CustomerAvailability
 )
 
 from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
@@ -69,7 +70,8 @@ class QuestionPublicSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'question_text', 'question_type', 'order',
             'parent_question', 'condition_answer', 'condition_option',
-            'options', 'sub_questions', 'child_questions','image'
+            'options', 'sub_questions', 'child_questions','image',
+            'measurement_unit', 'allow_quantity', 'max_measurements'
         ]
     
     def get_child_questions(self, obj):
@@ -137,19 +139,29 @@ class CustomerSubQuestionResponseSerializer(serializers.ModelSerializer):
         fields = ['id', 'sub_question', 'sub_question_text', 'answer', 'price_adjustment']
         read_only_fields = ['id', 'price_adjustment']
 
+class CustomerMeasurementResponseSerializer(serializers.ModelSerializer):
+    """Serializer for measurement responses"""
+    option_text = serializers.CharField(source='option.option_text', read_only=True)
+    
+    class Meta:
+        model = CustomerMeasurementResponse
+        fields = ['id', 'option', 'option_text', 'length', 'width', 'quantity']
+        read_only_fields = ['id']
+
 class CustomerQuestionResponseSerializer(serializers.ModelSerializer):
     """Serializer for question responses"""
     question_text = serializers.CharField(source='question.question_text', read_only=True)
     question_type = serializers.CharField(source='question.question_type', read_only=True)
     option_responses = CustomerOptionResponseSerializer(many=True, read_only=True)
     sub_question_responses = CustomerSubQuestionResponseSerializer(many=True, read_only=True)
+    measurement_responses = CustomerMeasurementResponseSerializer(many=True, read_only=True)
     
     class Meta:
         model = CustomerQuestionResponse
         fields = [
             'id', 'question', 'question_text', 'question_type',
             'yes_no_answer', 'text_answer', 'option_responses',
-            'sub_question_responses', 'price_adjustment'
+            'sub_question_responses', 'measurement_responses', 'price_adjustment'
         ]
         read_only_fields = ['id', 'price_adjustment']
 
@@ -287,7 +299,8 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
         selections = obj.customerserviceselection_set.all().prefetch_related(
             'package_quotes__package',
             'question_responses__option_responses',
-            'question_responses__sub_question_responses'
+            'question_responses__sub_question_responses',
+            'question_responses__measurement_responses'
         )
         return CustomerServiceSelectionDetailSerializer(selections, many=True).data
 
@@ -411,6 +424,13 @@ class ConditionalQuestionResponseSerializer(serializers.Serializer):
         allow_empty=True
     )
     
+    # For measurement questions
+    measurements = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True
+    )
+    
     def validate(self, data):
         """Validate response data based on question type"""
         question_type = data.get('question_type')
@@ -426,6 +446,16 @@ class ConditionalQuestionResponseSerializer(serializers.Serializer):
         elif question_type == 'multiple_yes_no':
             if not data.get('sub_question_answers'):
                 raise serializers.ValidationError("sub_question_answers is required for multiple_yes_no questions")
+        
+        elif question_type == 'measurement':
+            if not data.get('measurements'):
+                raise serializers.ValidationError("measurements is required for measurement questions")
+            # Validate each measurement has required fields
+            for measurement in data.get('measurements', []):
+                if not measurement.get('option_id'):
+                    raise serializers.ValidationError("Each measurement must have an option_id")
+                if not measurement.get('length') or not measurement.get('width'):
+                    raise serializers.ValidationError("Each measurement must have length and width")
         
         # Validate conditional question requirements
         if data.get('parent_question_id'):

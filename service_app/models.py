@@ -160,6 +160,7 @@ class Question(models.Model):
         ('multiple_yes_no', 'Multiple Yes/No Sub-Questions'),
         ('conditional', 'Conditional Questions'),
         ('quantity', 'How Many (Quantity Selection)'),
+        ('measurement', 'Area Measurement (Length × Width × Quantity)'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -180,6 +181,32 @@ class Question(models.Model):
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPES)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    
+    # Measurement question specific fields
+    measurement_unit = models.CharField(
+        max_length=20, 
+        null=True, 
+        blank=True,
+        choices=[
+            ('centimeters', 'Centimeters'),
+            ('centimetres', 'Centimetres'),
+            ('inches', 'Inches'),
+            ('feet', 'Feet'),
+            ('meters', 'Meters'),
+            ('metres', 'Metres'),
+        ],
+        help_text="Unit of measurement for length and width"
+    )
+    allow_quantity = models.BooleanField(
+        default=False,
+        help_text="Allow quantity input for each measurement row"
+    )
+    max_measurements = models.PositiveIntegerField(
+        null=True, 
+        blank=True,
+        help_text="Maximum number of measurement rows allowed. Null = infinite measurements allowed"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -315,8 +342,6 @@ class QuestionPricing(models.Model):
         ('percent', 'Percentage')
     ]
 
-    
-    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question = models.ForeignKey(Question, related_name='pricing_rules', on_delete=models.CASCADE)
     package = models.ForeignKey('Package', related_name='question_pricing', on_delete=models.CASCADE)

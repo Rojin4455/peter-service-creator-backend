@@ -19,7 +19,8 @@ from service_app.models import (
 from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
-    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerPackageQuote, SubmissionAddOn,CustomerAvailability
+    CustomerOptionResponse, CustomerSubQuestionResponse, CustomerMeasurementResponse,
+    CustomerPackageQuote, SubmissionAddOn,CustomerAvailability
 )
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
@@ -250,7 +251,7 @@ class SubmitServiceResponsesView(APIView):
                     self._process_question_response_data(question, response_data, question_response)
                     
                     # Calculate pricing adjustment (for averaging only) - optimized
-                    question_adjustment = self._calculate_question_adjustment_for_averaging_optimized(
+                    question_adjustment = self._calculate_question_adjustment_for_averaging(
                         question, response_data, question_response, service_selection, packages, sqft_mappings
                     )
                     
@@ -331,6 +332,26 @@ class SubmitServiceResponsesView(APIView):
                     quantity=quantity
                 )
         
+        elif question.question_type == 'measurement':
+            measurements = response_data.get('measurements', [])
+            
+            for measurement_data in measurements:
+                option_id = measurement_data.get('option_id')
+                length = Decimal(str(measurement_data.get('length', 0)))
+                width = Decimal(str(measurement_data.get('width', 0)))
+                quantity = measurement_data.get('quantity', 1)
+                
+                if option_id and length > 0 and width > 0:
+                    option = get_object_or_404(QuestionOption, id=option_id)
+                    
+                    CustomerMeasurementResponse.objects.create(
+                        question_response=question_response,
+                        option=option,
+                        length=length,
+                        width=width,
+                        quantity=quantity
+                    )
+        
         elif question.question_type == 'multiple_yes_no':
             sub_question_answers = response_data.get('sub_question_answers', [])
             
@@ -370,7 +391,7 @@ class SubmitServiceResponsesView(APIView):
                 )
             }
         
-        return self._calculate_question_adjustment_for_averaging_optimized(
+        return self._calculate_question_adjustment_for_averaging(
             question, response_data, question_response, service_selection, packages, sqft_mappings
         )
     
@@ -455,6 +476,12 @@ class SubmitServiceResponsesView(APIView):
             # Use stored responses to prevent duplication
             package_adjustment = self._calculate_sub_questions_adjustment_from_stored(
                 question_response, package, base_sqft_price
+            )
+        
+        elif question.question_type == 'measurement':
+            # Use stored responses to prevent duplication
+            package_adjustment = self._calculate_measurement_question_adjustment(
+                question_response, package
             )
         
         elif question.question_type == 'conditional':
@@ -570,6 +597,31 @@ class SubmitServiceResponsesView(APIView):
                     print(f"[DEBUG] Sub-question {sub_question.id} pricing ignored or not found")
         
         print(f"[DEBUG] Total sub-questions adjustment: {total_adjustment}")
+        return total_adjustment
+    
+    def _calculate_measurement_question_adjustment(self, question_response, package):
+        """Calculate adjustment for measurement question using stored responses"""
+        # Get pricing for this question and package
+        pricing = QuestionPricing.objects.filter(
+            question=question_response.question,
+            package=package
+        ).first()
+        
+        if not pricing:
+            return Decimal('0.00')
+        
+        # Only calculate if pricing type is upcharge_percent and value_type is amount
+        if pricing.yes_pricing_type != 'upcharge_percent' or pricing.value_type != 'amount':
+            return Decimal('0.00')
+        
+        total_adjustment = Decimal('0.00')
+        
+        # Calculate for each measurement row: (length × width × quantity) × yes_value
+        for measurement in question_response.measurement_responses.all():
+            area = measurement.length * measurement.width
+            row_total = area * Decimal(str(measurement.quantity)) * pricing.yes_value
+            total_adjustment += row_total
+        
         return total_adjustment
     
     def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):

@@ -246,6 +246,23 @@ class CustomerSubQuestionResponse(models.Model):
     class Meta:
         db_table = 'customer_sub_question_responses'
 
+class CustomerMeasurementResponse(models.Model):
+    """Customer responses to measurement questions (length × width × quantity)"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question_response = models.ForeignKey(CustomerQuestionResponse, related_name='measurement_responses', on_delete=models.CASCADE)
+    option = models.ForeignKey(QuestionOption, on_delete=models.CASCADE, help_text="The rug type or measurement label")
+    length = models.DecimalField(max_digits=10, decimal_places=2, help_text="Length measurement")
+    width = models.DecimalField(max_digits=10, decimal_places=2, help_text="Width measurement")
+    quantity = models.PositiveIntegerField(default=1, help_text="Quantity for this measurement row")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'customer_measurement_responses'
+    
+    def __str__(self):
+        return f"{self.option.option_text} - {self.length}×{self.width}×{self.quantity}"
+
 class CustomerPackageQuote(models.Model):
     """Package quotes for customer (all available packages)"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
