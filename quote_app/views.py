@@ -1463,10 +1463,10 @@ class EditServiceResponsesView(APIView):
         
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         
-        # Verify submission is in submitted state (after responses completed, before final approval)
-        if submission.status != 'submitted':
+        # Allow editing for both 'submitted' and 'approved' statuses
+        if submission.status not in ['submitted', 'approved']:
             return Response({
-                'error': 'Can only edit responses for submitted quotes'
+                'error': 'Can only edit responses for submitted or approved quotes'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         service_selection = get_object_or_404(
