@@ -1887,10 +1887,24 @@ class EditServiceResponsesView(APIView):
         """Reuse from SubmitServiceResponsesView"""
         return SubmitServiceResponsesView._generate_all_package_quotes(self, service_selection, submission)
     
+    def _generate_all_package_quotes_optimized(self, service_selection, submission, packages, sqft_mappings):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._generate_all_package_quotes_optimized(
+            self, service_selection, submission, packages, sqft_mappings
+        )
+    
     def _calculate_package_specific_adjustments_new(self, service_selection, package, base_sqft_price):
         """Reuse from SubmitServiceResponsesView"""
         return SubmitServiceResponsesView._calculate_package_specific_adjustments_new(
             self, service_selection, package, base_sqft_price
+        )
+    
+    def _calculate_package_specific_adjustments_new_optimized(self, question_responses, package, base_sqft_price, 
+                                                               all_question_pricings, all_option_pricings, all_sub_question_pricings):
+        """Reuse from SubmitServiceResponsesView"""
+        return SubmitServiceResponsesView._calculate_package_specific_adjustments_new_optimized(
+            self, question_responses, package, base_sqft_price, 
+            all_question_pricings, all_option_pricings, all_sub_question_pricings
         )
     
 
