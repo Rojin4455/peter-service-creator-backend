@@ -105,6 +105,9 @@ class CustomerSubmission(models.Model):
 
     is_on_the_go = models.BooleanField(default=False)
     
+    # Admin notes
+    bid_notes_private = models.TextField(null=True, blank=True, help_text="Private notes visible only to admins")
+    bid_notes_public = models.TextField(null=True, blank=True, help_text="Public notes visible to customers")
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

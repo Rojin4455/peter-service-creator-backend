@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
+from service_app.views import IsAdminPermission
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import Q, Prefetch
@@ -27,7 +28,7 @@ from .serializers import (
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,SubmissionAddOnSerializer,
-    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer
+    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer,SubmissionNotesUpdateSerializer
 )
 
 from service_app.serializers import GlobalSizePackageSerializer
@@ -180,41 +181,68 @@ class SubmitServiceResponsesView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request, submission_id, service_id):
-
+        """Submit service responses including measurement questions"""
         self.bid_in_person=False
-        # Optimize: Prefetch related objects to avoid N+1 queries
-        submission = get_object_or_404(
-            CustomerSubmission.objects.select_related('location', 'size_range'), 
-            id=submission_id
-        )
-        service_selection = get_object_or_404(
-            CustomerServiceSelection.objects.select_related('service', 'service__settings'), 
-            submission=submission,
-            service_id=service_id
-        )
         
-        responses = request.data.get('responses', [])
+        # Debug: Log the request
+        print(f"[DEBUG] ========== SubmitServiceResponsesView.post START ==========")
+        print(f"[DEBUG] submission_id: {submission_id}, service_id: {service_id}")
+        print(f"[DEBUG] Request method: {request.method}")
+        print(f"[DEBUG] Request data type: {type(request.data)}")
+        print(f"[DEBUG] Request data: {request.data}")
         
         try:
+            # Optimize: Prefetch related objects to avoid N+1 queries
+            print(f"[DEBUG] Step 1: Fetching submission...")
+            submission = get_object_or_404(
+                CustomerSubmission.objects.select_related('location', 'size_range'),
+                id=submission_id
+            )
+            print(f"[DEBUG] Step 1: Submission found - {submission.id}")
+            
+            print(f"[DEBUG] Step 2: Fetching service selection...")
+            service_selection = get_object_or_404(
+                CustomerServiceSelection.objects.select_related('service', 'service__settings'), 
+                submission=submission,
+                service_id=service_id
+            )
+            print(f"[DEBUG] Step 2: Service selection found - {service_selection.id}")
+            
+            responses = request.data.get('responses', [])
+            print(f"[DEBUG] Step 3: Responses count: {len(responses)}")
+            print(f"[DEBUG] Step 3: Responses data: {responses}")
+            
             with transaction.atomic():
+                print(f"[DEBUG] Step 4: Starting transaction...")
+                
                 # Validate conditional question logic first
+                print(f"[DEBUG] Step 5: Validating conditional responses...")
                 validation_result = self._validate_conditional_responses(responses, service_id)
+                print(f"[DEBUG] Step 5: Validation result: {validation_result}")
                 if not validation_result['valid']:
+                    print(f"[DEBUG] Step 5: Validation failed, returning error")
                     return Response({
                         'error': 'Invalid conditional question responses',
                         'details': validation_result['errors']
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
                 # Clear existing responses
-                service_selection.question_responses.all().delete()
+                print(f"[DEBUG] Step 6: Clearing existing responses...")
+                deleted_count = service_selection.question_responses.all().delete()[0]
+                print(f"[DEBUG] Step 6: Deleted {deleted_count} existing responses")
                 
                 # Process responses in dependency order (parents first, then children)
+                print(f"[DEBUG] Step 7: Ordering responses by dependency...")
                 ordered_responses = self._order_responses_by_dependency(responses)
+                print(f"[DEBUG] Step 7: Ordered responses count: {len(ordered_responses)}")
                 
                 # OPTIMIZATION: Prefetch all packages and related data once
+                print(f"[DEBUG] Step 8: Fetching packages...")
                 packages = Package.objects.filter(service=service_selection.service, is_active=True).select_related('service')
+                print(f"[DEBUG] Step 8: Found {packages.count()} packages")
                 
                 # OPTIMIZATION: Prefetch all sqft mappings for all packages at once
+                print(f"[DEBUG] Step 9: Fetching sqft mappings...")
                 sqft_mappings = {}
                 if submission.size_range:
                     sqft_mappings = {
@@ -224,133 +252,204 @@ class SubmitServiceResponsesView(APIView):
                             global_size=submission.size_range
                         ).select_related('service_package', 'global_size')
                     }
+                print(f"[DEBUG] Step 9: Found {len(sqft_mappings)} sqft mappings")
                 
                 # OPTIMIZATION: Prefetch all questions at once to avoid N+1 queries
+                print(f"[DEBUG] Step 10: Fetching questions...")
                 question_ids = [r['question_id'] for r in ordered_responses]
+                print(f"[DEBUG] Step 10: Question IDs: {question_ids}")
                 questions_dict = {
                     q.id: q for q in Question.objects.filter(id__in=question_ids).select_related('service')
                 }
+                print(f"[DEBUG] Step 10: Found {len(questions_dict)} questions")
                 
                 total_adjustment = Decimal('0.00')
+                print(f"[DEBUG] Step 11: Processing {len(ordered_responses)} responses...")
                 
-                for response_data in ordered_responses:
+                for idx, response_data in enumerate(ordered_responses):
+                    print(f"[DEBUG] Step 11.{idx+1}: Processing response {idx+1}/{len(ordered_responses)}")
+                    print(f"[DEBUG] Step 11.{idx+1}: Response data: {response_data}")
+                    
                     question_id = response_data['question_id']
+                    question_type = response_data.get('question_type', 'unknown')
+                    print(f"[DEBUG] Step 11.{idx+1}: Question ID: {question_id}, Type: {question_type}")
+                    
                     question = questions_dict.get(question_id)
                     if not question:
+                        print(f"[DEBUG] Step 11.{idx+1}: Question not in dict, fetching...")
                         question = get_object_or_404(Question, id=question_id)
+                    print(f"[DEBUG] Step 11.{idx+1}: Question found: {question.question_text[:50]}")
                     
                     # Create question response
+                    print(f"[DEBUG] Step 11.{idx+1}: Creating CustomerQuestionResponse...")
                     question_response = CustomerQuestionResponse.objects.create(
                         service_selection=service_selection,
                         question=question,
                         yes_no_answer=response_data.get('yes_no_answer'),
                         text_answer=response_data.get('text_answer', '')
                     )
+                    print(f"[DEBUG] Step 11.{idx+1}: QuestionResponse created: {question_response.id}")
                     
                     # Process response data and store related objects
+                    print(f"[DEBUG] Step 11.{idx+1}: Processing question response data...")
                     self._process_question_response_data(question, response_data, question_response)
+                    print(f"[DEBUG] Step 11.{idx+1}: Question response data processed")
                     
                     # Calculate pricing adjustment (for averaging only) - optimized
+                    print(f"[DEBUG] Step 11.{idx+1}: Calculating question adjustment...")
                     question_adjustment = self._calculate_question_adjustment_for_averaging(
                         question, response_data, question_response, service_selection
                     )
+                    print(f"[DEBUG] Step 11.{idx+1}: Question adjustment: {question_adjustment}")
                     
                     question_response.price_adjustment = question_adjustment
                     question_response.save()
+                    print(f"[DEBUG] Step 11.{idx+1}: QuestionResponse saved with adjustment")
                     
                     total_adjustment += question_adjustment
+                    print(f"[DEBUG] Step 11.{idx+1}: Total adjustment so far: {total_adjustment}")
                 
                 # Update service selection totals (this is just for averaging display)
+                print(f"[DEBUG] Step 12: Updating service selection totals...")
                 service_selection.question_adjustments = total_adjustment
                 service_selection.save()
+                print(f"[DEBUG] Step 12: Service selection updated, total_adjustment: {total_adjustment}")
                 
                 surcharge_for_submission = False
                 # Generate package quotes for ALL packages - optimized
+                print(f"[DEBUG] Step 13: Generating package quotes...")
                 surcharge_applied, surcharge_price = self._generate_all_package_quotes_optimized(
                     service_selection, submission, packages, sqft_mappings
                 )
                 
-                print("+++++++++++++surcharge_applied, surcharge_price++++++++++",surcharge_applied, surcharge_price)
+                print(f"[DEBUG] Step 13: Package quotes generated")
+                print(f"[DEBUG] Step 13: surcharge_applied: {surcharge_applied}, surcharge_price: {surcharge_price}")
                 if surcharge_applied:
                     surcharge_for_submission = True
+                    print(f"[DEBUG] Step 13: Surcharge will be applied to submission")
 
                 # After all services processed
-
-                    
-                    
-                
+                print(f"[DEBUG] Step 14: Checking if all services completed...")
                 # Check if all services have responses - optimized
                 all_services_completed = self._check_all_services_completed_optimized(submission)
+                print(f"[DEBUG] Step 14: All services completed: {all_services_completed}")
+                
                 if all_services_completed:
+                    print(f"[DEBUG] Step 14: Setting submission status to 'submitted'")
                     submission.status = 'submitted'
                     submission.save()
+                    
                 if surcharge_for_submission:
+                    print(f"[DEBUG] Step 15: Applying surcharge to submission...")
                     submission.quote_surcharge_applicable = True
                     submission.total_surcharges = surcharge_price
+                    print(f"[DEBUG] Step 15: Surcharge applied: {surcharge_price}")
                 
+                print(f"[DEBUG] Step 16: Setting bid_in_person flag...")
                 submission.is_bid_in_person = self.bid_in_person
                 submission.save()
-                print("submission.total_surcharges",submission.total_surcharges)
+                print(f"[DEBUG] Step 16: Submission saved, bid_in_person: {self.bid_in_person}")
+                print(f"[DEBUG] Step 16: submission.total_surcharges: {submission.total_surcharges}")
 
                 if not submission.is_on_the_go:
+                    print(f"[DEBUG] Step 17: Creating/updating GHL contact...")
                     create_or_update_ghl_contact(submission)
+                    print(f"[DEBUG] Step 17: GHL contact processed")
+                else:
+                    print(f"[DEBUG] Step 17: Skipping GHL contact (on_the_go)")
                 
-                
-                return Response({
+                print(f"[DEBUG] Step 18: Preparing success response...")
+                response_data = {
                     'message': 'Responses submitted successfully',
                     'all_services_completed': all_services_completed,
                     'total_questions_answered': len(ordered_responses),
                     'conditional_questions_answered': len([r for r in responses if r.get('parent_question_id')])
-                })
+                }
+                print(f"[DEBUG] Step 18: Response data: {response_data}")
+                print(f"[DEBUG] ========== SubmitServiceResponsesView.post SUCCESS - Returning response ==========")
+                return Response(response_data)
         
         except Exception as e:
+            import traceback
+            print(f"[DEBUG] ========== SubmitServiceResponsesView.post EXCEPTION ==========")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Exception message: {str(e)}")
+            print(f"[DEBUG] Exception traceback:")
+            traceback.print_exc()
+            print(f"[DEBUG] ========== END EXCEPTION ==========")
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     def _process_question_response_data(self, question, response_data, question_response):
         """Process and store response data for different question types"""
+        print(f"[DEBUG] _process_question_response_data: Question type: {question.question_type}")
+        print(f"[DEBUG] _process_question_response_data: Response data keys: {response_data.keys()}")
+        
         if question.question_type in ['describe', 'quantity']:
+            print(f"[DEBUG] _process_question_response_data: Processing {question.question_type} question")
             selected_options = response_data.get('selected_options', [])
+            print(f"[DEBUG] _process_question_response_data: Selected options count: {len(selected_options)}")
             
             # Use set to prevent duplicates
             processed_options = set()
             
-            for option_data in selected_options:
+            for idx, option_data in enumerate(selected_options):
+                print(f"[DEBUG] _process_question_response_data: Processing option {idx+1}/{len(selected_options)}")
                 option_id = option_data['option_id']
                 quantity = option_data.get('quantity', 1)
                 
                 # Create unique key to prevent duplicates
                 option_key = f"{option_id}_{quantity}"
                 if option_key in processed_options:
+                    print(f"[DEBUG] _process_question_response_data: Skipping duplicate option: {option_key}")
                     continue
                 processed_options.add(option_key)
                 
                 option = get_object_or_404(QuestionOption, id=option_id)
+                print(f"[DEBUG] _process_question_response_data: Creating CustomerOptionResponse for option: {option.option_text}")
                 
                 CustomerOptionResponse.objects.create(
                     question_response=question_response,
                     option=option,
                     quantity=quantity
                 )
+                print(f"[DEBUG] _process_question_response_data: CustomerOptionResponse created")
         
         elif question.question_type == 'measurement':
+            print(f"[DEBUG] _process_question_response_data: Processing MEASUREMENT question")
             measurements = response_data.get('measurements', [])
+            print(f"[DEBUG] _process_question_response_data: Measurements array: {measurements}")
+            print(f"[DEBUG] _process_question_response_data: Measurements count: {len(measurements)}")
             
-            for measurement_data in measurements:
+            for idx, measurement_data in enumerate(measurements):
+                print(f"[DEBUG] _process_question_response_data: Processing measurement {idx+1}/{len(measurements)}")
+                print(f"[DEBUG] _process_question_response_data: Measurement data: {measurement_data}")
+                
                 option_id = measurement_data.get('option_id')
                 length = Decimal(str(measurement_data.get('length', 0)))
                 width = Decimal(str(measurement_data.get('width', 0)))
                 quantity = measurement_data.get('quantity', 1)
                 
+                print(f"[DEBUG] _process_question_response_data: Parsed values - option_id: {option_id}, length: {length}, width: {width}, quantity: {quantity}")
+                
                 if option_id and length > 0 and width > 0:
+                    print(f"[DEBUG] _process_question_response_data: Valid measurement, fetching option...")
                     option = get_object_or_404(QuestionOption, id=option_id)
+                    print(f"[DEBUG] _process_question_response_data: Option found: {option.option_text}")
                     
-                    CustomerMeasurementResponse.objects.create(
+                    print(f"[DEBUG] _process_question_response_data: Creating CustomerMeasurementResponse...")
+                    measurement_response = CustomerMeasurementResponse.objects.create(
                         question_response=question_response,
                         option=option,
                         length=length,
                         width=width,
                         quantity=quantity
                     )
+                    print(f"[DEBUG] _process_question_response_data: CustomerMeasurementResponse created with ID: {measurement_response.id}")
+                else:
+                    print(f"[DEBUG] _process_question_response_data: Invalid measurement data - skipping")
+                    print(f"[DEBUG] _process_question_response_data: option_id: {option_id}, length: {length}, width: {width}")
+            
+            print(f"[DEBUG] _process_question_response_data: Finished processing all measurements")
         
         elif question.question_type == 'multiple_yes_no':
             sub_question_answers = response_data.get('sub_question_answers', [])
@@ -1242,6 +1341,30 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
             ),
             id=submission_id
         )
+
+
+class UpdateSubmissionNotesView(APIView):
+    """Endpoint for admins to add/update notes on a submission"""
+    permission_classes = [IsAdminPermission]
+    
+    def patch(self, request, submission_id):
+        """Update notes for a submission (admin only)"""
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        
+        serializer = SubmissionNotesUpdateSerializer(
+            submission, 
+            data=request.data, 
+            partial=True
+        )
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'message': 'Notes updated successfully',
+                'data': serializer.data
+            }, status=status.HTTP_200_OK)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # Step 8: Submit final quote

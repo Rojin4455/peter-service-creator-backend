@@ -292,7 +292,11 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             #coupon
             'applied_coupon',
             'is_coupon_applied',
-            'discounted_amount'
+            'discounted_amount',
+            
+            # Admin notes
+            'bid_notes_private',
+            'bid_notes_public'
         ]
 
     def get_service_selections(self, obj):
@@ -556,3 +560,18 @@ class SubmissionCouponSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerSubmission
         fields = ["id", "final_total", "discounted_total", "applied_coupon"]
+
+
+class SubmissionNotesUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating admin notes on a submission"""
+    
+    class Meta:
+        model = CustomerSubmission
+        fields = ['bid_notes_private', 'bid_notes_public']
+    
+    def validate(self, data):
+        """Validate that at least one note field is provided"""
+        if not data.get('bid_notes_private') and not data.get('bid_notes_public'):
+            # Allow empty strings to clear notes
+            pass
+        return data
