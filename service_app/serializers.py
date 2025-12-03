@@ -487,12 +487,18 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         if options_data:
             instance.options.all().delete()
             for option_data in options_data:
+                # Remove 'question' from option_data if present to avoid duplicate argument
+                option_data.pop('question', None)
+                # Remove 'pricing_rules' if present (it's read-only)
+                option_data.pop('pricing_rules', None)
                 QuestionOption.objects.create(question=instance, **option_data)
         
         # Handle sub-questions update (simple approach - recreate all)
         if sub_questions_data:
             instance.sub_questions.all().delete()
             for sub_question_data in sub_questions_data:
+                # Remove 'parent_question' if present to avoid duplicate argument
+                sub_question_data.pop('parent_question', None)
                 SubQuestion.objects.create(parent_question=instance, **sub_question_data)
         
         return instance
