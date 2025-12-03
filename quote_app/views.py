@@ -931,7 +931,8 @@ class SubmitServiceResponsesView(APIView):
         question_responses = service_selection.question_responses.all().prefetch_related(
             'question',
             'option_responses__option',
-            'sub_question_responses__sub_question'
+            'sub_question_responses__sub_question',
+            'measurement_responses__option'  # Prefetch measurement responses
         )
         
         # OPTIMIZATION: Prefetch all pricing rules for all packages and questions
@@ -976,6 +977,13 @@ class SubmitServiceResponsesView(APIView):
                 ).select_related('sub_question', 'package')
             }
         
+        # Check if there's a measurement question in the responses
+        measurement_question_response = None
+        for qr in question_responses:
+            if qr.question.question_type == 'measurement':
+                measurement_question_response = qr
+                break
+        
         # Generate quotes for each package
         for package in packages:
             base_price = package.base_price
@@ -983,19 +991,47 @@ class SubmitServiceResponsesView(APIView):
             # Get package-specific sqft price from pre-fetched dict
             sqft_price = sqft_mappings.get(package.id, Decimal('0.00'))
             
-            # Calculate package-specific question adjustments - optimized
+            # Calculate measurement total if measurement question exists
+            measurement_total = Decimal('0.00')
+            if measurement_question_response:
+                measurement_total = self._calculate_measurement_question_adjustment(
+                    measurement_question_response, package
+                )
+                print(f"[DEBUG] Measurement question found for package {package.name} - measurement_total: {measurement_total}, base_price: {base_price}")
+            
+            # Calculate OTHER question adjustments (excluding measurement questions)
+            # Filter out measurement questions from adjustments calculation
+            other_question_responses = [
+                qr for qr in question_responses 
+                if qr.question.question_type != 'measurement'
+            ]
+            
             question_adjustments = self._calculate_package_specific_adjustments_new_optimized(
-                question_responses, package, sqft_price, 
+                other_question_responses, package, sqft_price, 
                 all_question_pricings, all_option_pricings, all_sub_question_pricings
             )
-
-            # New total logic:
-            # - Compute the quoted total WITHOUT base_price
-            # - If quoted total is below the package base_price, use base_price
-            # - Otherwise, do not add base_price again
-            # - Include surcharge in the total
-            quoted_total = sqft_price + question_adjustments + surcharge_amount_applied
-            total_price = base_price if quoted_total < base_price else quoted_total
+            
+            # Measurement logic: effective_base = max(measurement_total, base_price)
+            if measurement_total > 0:
+                effective_base_price = max(measurement_total, base_price)
+                print(f"[DEBUG] Measurement override for package {package.name} - base_price: {base_price}, measurement_total: {measurement_total}, effective_base: {effective_base_price}")
+            else:
+                effective_base_price = base_price
+            
+            # Calculate total: effective_base + sqft + other_adjustments + surcharge
+            # If measurement exists and is higher than base, use measurement_total
+            # Otherwise use normal logic
+            if measurement_total > 0:
+                # Measurement question exists: effective_base + sqft + other_adjustments + surcharge
+                quoted_total = effective_base_price + sqft_price + question_adjustments + surcharge_amount_applied
+                total_price = quoted_total
+            else:
+                # Normal logic: quoted_total = sqft + adjustments + surcharge
+                # If below base_price, use base_price
+                quoted_total = sqft_price + question_adjustments + surcharge_amount_applied
+                total_price = base_price if quoted_total < base_price else quoted_total
+            
+            print(f"[DEBUG] Package {package.name} - base: {base_price}, measurement: {measurement_total}, effective_base: {effective_base_price}, sqft: {sqft_price}, adjustments: {question_adjustments}, surcharge: {surcharge_amount_applied}, total: {total_price}")
             
             # Get package features from pre-fetched dict
             package_features_data = features_by_package.get(package.id, {'included': [], 'excluded': []})
@@ -1005,9 +1041,10 @@ class SubmitServiceResponsesView(APIView):
             CustomerPackageQuote.objects.create(
                 service_selection=service_selection,
                 package=package,
-                base_price=base_price,
+                base_price=base_price,  # Original base price
                 sqft_price=sqft_price,
-                question_adjustments=question_adjustments,
+                question_adjustments=question_adjustments,  # Other adjustments (non-measurement)
+                measurement_total=measurement_total,  # Measurement calculation total
                 surcharge_amount=surcharge_amount_applied,  # Store actual surcharge amount
                 total_price=total_price,
                 included_features=included_features,
@@ -1080,6 +1117,11 @@ class SubmitServiceResponsesView(APIView):
         
         for question_response in question_responses:
             question = question_response.question
+            
+            # Skip measurement questions - they are handled separately
+            if question.question_type == 'measurement':
+                print(f"[DEBUG] Skipping measurement question {question.id} in adjustments calculation")
+                continue
             
             if question.question_type == 'yes_no':
                 if question_response.yes_no_answer is True:
@@ -1337,7 +1379,8 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
                 'customerserviceselection_set__package_quotes__package',
                 'customerserviceselection_set__question_responses__question',
                 'customerserviceselection_set__question_responses__option_responses__option',
-                'customerserviceselection_set__question_responses__sub_question_responses__sub_question'
+                'customerserviceselection_set__question_responses__sub_question_responses__sub_question',
+                'customerserviceselection_set__question_responses__measurement_responses__option'
             ),
             id=submission_id
         )
@@ -1881,13 +1924,51 @@ class EditServiceResponsesView(APIView):
             'responses': []
         }
         
-        for qr in service_selection.question_responses.all():
+        for qr in service_selection.question_responses.all().prefetch_related(
+            'option_responses__option',
+            'sub_question_responses__sub_question',
+            'measurement_responses__option'
+        ):
             response_data = {
                 'question_id': str(qr.question.id),
                 'question_text': qr.question.question_text,
+                'question_type': qr.question.question_type,
                 'yes_no_answer': qr.yes_no_answer,
                 'text_answer': qr.text_answer,
             }
+            
+            # Add option responses for describe/quantity questions
+            if qr.question.question_type in ['describe', 'quantity']:
+                response_data['selected_options'] = [
+                    {
+                        'option_id': str(opt_resp.option.id),
+                        'quantity': opt_resp.quantity
+                    }
+                    for opt_resp in qr.option_responses.all()
+                ]
+            
+            # Add sub-question responses for multiple_yes_no questions
+            if qr.question.question_type == 'multiple_yes_no':
+                response_data['sub_question_answers'] = [
+                    {
+                        'sub_question_id': str(sub_resp.sub_question.id),
+                        'answer': sub_resp.answer
+                    }
+                    for sub_resp in qr.sub_question_responses.all()
+                ]
+            
+            # Include measurement responses for measurement questions
+            if qr.question.question_type == 'measurement':
+                response_data['measurements'] = [
+                    {
+                        'option_id': str(meas_resp.option.id),
+                        'length': float(meas_resp.length),
+                        'width': float(meas_resp.width),
+                        'quantity': meas_resp.quantity
+                    }
+                    for meas_resp in qr.measurement_responses.all()
+                ]
+            
             snapshot['responses'].append(response_data)
         
         return snapshot
@@ -1902,8 +1983,47 @@ class EditServiceResponsesView(APIView):
         for qid, new_resp in new_responses_dict.items():
             if qid in old_responses_dict:
                 old_resp = old_responses_dict[qid]
-                if old_resp.get('yes_no_answer') != new_resp.get('yes_no_answer'):
-                    changes.append(f"Question {qid}: answer changed")
+                question_type = new_resp.get('question_type', old_resp.get('question_type'))
+                
+                if question_type == 'yes_no':
+                    if old_resp.get('yes_no_answer') != new_resp.get('yes_no_answer'):
+                        changes.append(f"Question {qid}: answer changed")
+                
+                elif question_type in ['describe', 'quantity']:
+                    old_options = set(
+                        (opt['option_id'], opt.get('quantity', 1)) 
+                        for opt in old_resp.get('selected_options', [])
+                    )
+                    new_options = set(
+                        (opt['option_id'], opt.get('quantity', 1)) 
+                        for opt in new_resp.get('selected_options', [])
+                    )
+                    if old_options != new_options:
+                        changes.append(f"Question {qid}: options changed")
+                
+                elif question_type == 'multiple_yes_no':
+                    old_subs = set(
+                        (sub['sub_question_id'], sub['answer']) 
+                        for sub in old_resp.get('sub_question_answers', [])
+                    )
+                    new_subs = set(
+                        (sub['sub_question_id'], sub['answer']) 
+                        for sub in new_resp.get('sub_question_answers', [])
+                    )
+                    if old_subs != new_subs:
+                        changes.append(f"Question {qid}: sub-question answers changed")
+                
+                elif question_type == 'measurement':
+                    old_measurements = [
+                        (m['option_id'], m['length'], m['width'], m.get('quantity', 1))
+                        for m in old_resp.get('measurements', [])
+                    ]
+                    new_measurements = [
+                        (m['option_id'], m['length'], m['width'], m.get('quantity', 1))
+                        for m in new_resp.get('measurements', [])
+                    ]
+                    if old_measurements != new_measurements:
+                        changes.append(f"Question {qid}: measurements changed")
             else:
                 changes.append(f"Question {qid}: new response added")
         

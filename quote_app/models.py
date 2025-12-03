@@ -276,6 +276,12 @@ class CustomerPackageQuote(models.Model):
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
     sqft_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     question_adjustments = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    measurement_total = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal('0.00'),
+        help_text="Total from measurement question (replaces base_price if higher)"
+    )
     surcharge_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
     

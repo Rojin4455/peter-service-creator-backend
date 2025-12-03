@@ -183,6 +183,7 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'package', 'package_name', 'package_description', 'service_name',
             'base_price', 'sqft_price', 'question_adjustments',
+            'measurement_total',  # Measurement question total
             'surcharge_amount', 'total_price', 'is_selected',
             'included_features', 'excluded_features',
             'included_features_details', 'excluded_features_details'
