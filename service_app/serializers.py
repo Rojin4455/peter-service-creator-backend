@@ -215,7 +215,8 @@ class QuestionOptionSerializer(serializers.ModelSerializer):
             'allow_quantity', 'max_quantity', 'pricing_rules','image'
         ]
         extra_kwargs = {
-            'question': {'required': False}
+            'question': {'required': False},
+            'option_text': {'allow_blank': True, 'required': False}  # Allow blank for measurement questions
         }
         read_only_fields = ['id', 'created_at']
 
@@ -460,12 +461,16 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         print("validated_data: ",validated_data)
         options_data = validated_data.pop('options', [])
         sub_questions_data = validated_data.pop('sub_questions', [])
-
         
+        question_type = validated_data.get('question_type')
         question = Question.objects.create(**validated_data)
         
         # Create options if provided
+        # For measurement questions, skip options with blank option_text
         for option_data in options_data:
+            # Skip options with blank option_text for measurement questions
+            if question_type == 'measurement' and not option_data.get('option_text', '').strip():
+                continue
             QuestionOption.objects.create(question=question, **option_data)
         
         # Create sub-questions if provided
@@ -486,11 +491,15 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         # Handle options update (simple approach - recreate all)
         if options_data:
             instance.options.all().delete()
+            question_type = instance.question_type
             for option_data in options_data:
                 # Remove 'question' from option_data if present to avoid duplicate argument
                 option_data.pop('question', None)
                 # Remove 'pricing_rules' if present (it's read-only)
                 option_data.pop('pricing_rules', None)
+                # Skip options with blank option_text for measurement questions
+                if question_type == 'measurement' and not option_data.get('option_text', '').strip():
+                    continue
                 QuestionOption.objects.create(question=instance, **option_data)
         
         # Handle sub-questions update (simple approach - recreate all)
