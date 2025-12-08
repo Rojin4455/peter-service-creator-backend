@@ -326,8 +326,8 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         # Soft delete
-        instance.is_active = False
-        instance.save()
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 # Question Option Views
 class QuestionOptionListCreateView(generics.ListCreateAPIView):
