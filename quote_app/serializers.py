@@ -177,6 +177,7 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source='service_selection.service.name', read_only=True)
     included_features_details = serializers.SerializerMethodField()
     excluded_features_details = serializers.SerializerMethodField()
+    effective_total_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = CustomerPackageQuote
@@ -184,10 +185,12 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
             'id', 'package', 'package_name', 'package_description', 'service_name',
             'base_price', 'sqft_price', 'question_adjustments',
             'measurement_total',  # Measurement question total
-            'surcharge_amount', 'total_price', 'is_selected',
+            'surcharge_amount', 'total_price', 'effective_total_price', 'is_selected',
+            'admin_override_price', 'admin_override_set_at', 'admin_override_set_by',
             'included_features', 'excluded_features',
             'included_features_details', 'excluded_features_details'
         ]
+        read_only_fields = ['admin_override_set_at', 'admin_override_set_by']
     
     def get_included_features_details(self, obj):
         if not obj.included_features:

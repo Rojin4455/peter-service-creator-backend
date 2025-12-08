@@ -31,6 +31,9 @@ urlpatterns = [
     # Admin endpoint to update submission notes
     path('<uuid:submission_id>/notes/', views.UpdateSubmissionNotesView.as_view(), name='update-submission-notes'),
     
+    # Admin endpoint to update package price
+    path('package-quotes/<uuid:quote_id>/price/', views.UpdatePackagePriceView.as_view(), name='update-package-price'),
+    
     # Step 8: Submit final quote
     path('<uuid:submission_id>/submit/', views.SubmitFinalQuoteView.as_view(), name='submit-quote'),
 

@@ -772,7 +772,11 @@ class SubmitServiceResponsesView(APIView):
         return total_adjustment
     
     def _calculate_measurement_question_adjustment(self, question_response, package):
-        """Calculate adjustment for measurement question using stored responses"""
+        """Calculate total price for measurement question using stored responses
+        
+        Returns the total price calculated from measurements (length × width × quantity × price_per_unit).
+        This total can replace the base_price if it's higher.
+        """
         # Get pricing for this question and package
         pricing = QuestionPricing.objects.filter(
             question=question_response.question,
@@ -780,21 +784,57 @@ class SubmitServiceResponsesView(APIView):
         ).first()
         
         if not pricing:
+            print(f"[DEBUG] _calculate_measurement_question_adjustment: No pricing found for question {question_response.question.id} and package {package.id}")
             return Decimal('0.00')
         
-        # Only calculate if pricing type is upcharge_percent and value_type is amount
-        if pricing.yes_pricing_type != 'upcharge_percent' or pricing.value_type != 'amount':
+        # Skip if pricing type is 'ignore'
+        if pricing.yes_pricing_type == 'ignore':
+            print(f"[DEBUG] _calculate_measurement_question_adjustment: Pricing type is 'ignore', skipping calculation")
             return Decimal('0.00')
         
-        total_adjustment = Decimal('0.00')
+        # Get all measurement responses
+        measurement_responses = question_response.measurement_responses.all()
+        if not measurement_responses.exists():
+            print(f"[DEBUG] _calculate_measurement_question_adjustment: No measurement responses found for question {question_response.question.id}")
+            return Decimal('0.00')
         
-        # Calculate for each measurement row: (length × width × quantity) × yes_value
-        for measurement in question_response.measurement_responses.all():
+        print(f"[DEBUG] _calculate_measurement_question_adjustment: Found {measurement_responses.count()} measurement responses")
+        print(f"[DEBUG] _calculate_measurement_question_adjustment: Pricing type: {pricing.yes_pricing_type}, Value type: {pricing.value_type}, Value: {pricing.yes_value}")
+        
+        total_price = Decimal('0.00')
+        base_price = package.base_price
+        
+        # Calculate for each measurement row
+        for measurement in measurement_responses:
             area = measurement.length * measurement.width
-            row_total = area * Decimal(str(measurement.quantity)) * pricing.yes_value
-            total_adjustment += row_total
+            quantity = Decimal(str(measurement.quantity))
+            
+            # Calculate price for this row based on value_type
+            if pricing.value_type == 'percent':
+                # Percentage: (area × quantity) × (base_price × yes_value / 100)
+                if base_price > 0:
+                    unit_price = base_price * (pricing.yes_value / Decimal('100'))
+                    row_total = area * quantity * unit_price
+                else:
+                    row_total = Decimal('0.00')
+            else:
+                # Amount: (area × quantity) × yes_value (price per unit area)
+                row_total = area * quantity * pricing.yes_value
+            
+            # For measurement questions, we typically use upcharge_percent as the pricing type
+            # but treat it as a total price calculation, not an adjustment
+            # Discounts are handled separately if needed
+            if pricing.yes_pricing_type == 'discount_percent':
+                # For discounts, we still calculate the total but it will be handled in adjustments
+                # For now, we'll return 0 and let it be handled as an adjustment
+                print(f"[DEBUG] _calculate_measurement_question_adjustment: Discount type not supported for measurement total, treating as 0")
+                row_total = Decimal('0.00')
+            
+            total_price += row_total
+            print(f"[DEBUG] _calculate_measurement_question_adjustment: Measurement row - length: {measurement.length}, width: {measurement.width}, qty: {quantity}, area: {area}, row_total: {row_total}")
         
-        return total_adjustment
+        print(f"[DEBUG] _calculate_measurement_question_adjustment: Total price: {total_price}")
+        return total_price
     
     def _apply_pricing_rule(self, pricing_type, value, value_type, base_sqft_price, quantity=1):
         """Apply pricing rule based on type and value type"""
@@ -908,6 +948,17 @@ class SubmitServiceResponsesView(APIView):
             except ServiceSettings.DoesNotExist:
                 pass
         
+        # ✅ PRESERVE admin overrides before deleting quotes
+        existing_quotes = service_selection.package_quotes.all()
+        admin_overrides = {}
+        for quote in existing_quotes:
+            if quote.admin_override_price is not None:
+                admin_overrides[quote.package_id] = {
+                    'admin_override_price': quote.admin_override_price,
+                    'admin_override_set_at': quote.admin_override_set_at,
+                    'admin_override_set_by': quote.admin_override_set_by
+                }
+        
         # Clear existing quotes for this service
         service_selection.package_quotes.all().delete()
         
@@ -1012,6 +1063,7 @@ class SubmitServiceResponsesView(APIView):
             )
             
             # Measurement logic: effective_base = max(measurement_total, base_price)
+            # measurement_total should always be positive (it's a total price, not an adjustment)
             if measurement_total > 0:
                 effective_base_price = max(measurement_total, base_price)
                 print(f"[DEBUG] Measurement override for package {package.name} - base_price: {base_price}, measurement_total: {measurement_total}, effective_base: {effective_base_price}")
@@ -1038,7 +1090,8 @@ class SubmitServiceResponsesView(APIView):
             included_features = package_features_data['included']
             excluded_features = package_features_data['excluded']
             
-            CustomerPackageQuote.objects.create(
+            # Create the quote
+            quote = CustomerPackageQuote.objects.create(
                 service_selection=service_selection,
                 package=package,
                 base_price=base_price,  # Original base price
@@ -1051,6 +1104,14 @@ class SubmitServiceResponsesView(APIView):
                 excluded_features=excluded_features,
                 is_selected=False
             )
+            
+            # ✅ RESTORE admin override if it existed for this package
+            if package.id in admin_overrides:
+                override_data = admin_overrides[package.id]
+                quote.admin_override_price = override_data['admin_override_price']
+                quote.admin_override_set_at = override_data['admin_override_set_at']
+                quote.admin_override_set_by = override_data['admin_override_set_by']
+                quote.save()
         
         return surcharge_applied, surcharge_amount_applied
     
@@ -1512,7 +1573,7 @@ class SubmitFinalQuoteView(APIView):
             
             service_selection.final_base_price = quote.base_price + quote.sqft_price
             service_selection.final_sqft_price = quote.sqft_price
-            service_selection.final_total_price = quote.total_price
+            service_selection.final_total_price = quote.effective_total_price
             service_selection.save()
             
             # Mark this quote as selected
@@ -1548,8 +1609,8 @@ class SubmitFinalQuoteView(APIView):
                 total_sqft_price += selected_quote.sqft_price
                 total_adjustments += selected_quote.question_adjustments
                 # Use computed package total (with base-price-minimum logic applied and surcharge included)
-                total_services_price += selected_quote.total_price
-                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.total_price}")
+                total_services_price += selected_quote.effective_total_price
+                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.effective_total_price}")
         
         # # Calculate add-ons total
         # if submission.addons.exists():
@@ -1690,9 +1751,9 @@ class EditServiceResponsesView(APIView):
                         'submission_id': submission.id,
                         'service_id': service_id,
                         'selected_package': {
-                            'id': new_package_quote.package.id,
-                            'name': new_package_quote.package.name,
-                            'new_price': new_package_quote.total_price
+                        'id': new_package_quote.package.id,
+                        'name': new_package_quote.package.name,
+                        'new_price': new_package_quote.effective_total_price
                         } if new_package_quote else None,
                         'final_total': submission.final_total
                     })
@@ -1822,8 +1883,8 @@ class EditServiceResponsesView(APIView):
                     'selected_package': {
                         'id': new_package_quote.package.id,
                         'name': new_package_quote.package.name,
-                        'old_price': old_package_quote.total_price if old_package_quote else None,
-                        'new_price': new_package_quote.total_price
+                        'old_price': old_package_quote.effective_total_price if old_package_quote else None,
+                        'new_price': new_package_quote.effective_total_price
                     } if new_package_quote else None,
                     'edit_count': submission.edit_count,
                     'surcharge_applied': surcharge_applied
@@ -1847,10 +1908,10 @@ class EditServiceResponsesView(APIView):
             service_selection.selected_package_id = package_id
             service_selection.final_base_price = package_quote.base_price + package_quote.sqft_price
             service_selection.final_sqft_price = package_quote.sqft_price
-            service_selection.final_total_price = package_quote.total_price
+            service_selection.final_total_price = package_quote.effective_total_price
             service_selection.save()
             
-            print(f"[DEBUG] Restored package selection: {package_id} with new price: {package_quote.total_price}")
+            print(f"[DEBUG] Restored package selection: {package_id} with new price: {package_quote.effective_total_price}")
             
         except CustomerPackageQuote.DoesNotExist:
             print(f"[ERROR] Could not restore package {package_id} - quote not found after regeneration")
@@ -1883,10 +1944,10 @@ class EditServiceResponsesView(APIView):
                 total_base_price += selected_quote.base_price
                 total_sqft_price += selected_quote.sqft_price
                 total_adjustments += selected_quote.question_adjustments
-                total_services_price += selected_quote.total_price
+                total_services_price += selected_quote.effective_total_price
                 print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
                       f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, "
-                      f"surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.total_price}")
+                      f"surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.effective_total_price}")
         
         submission_addons = submission.submission_addons.select_related("addon")
         for sub_addon in submission_addons:
@@ -2497,6 +2558,63 @@ class DeclineSubmissionView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class UpdatePackagePriceView(APIView):
+    """Admin endpoint to override price for a specific package quote"""
+    permission_classes = [IsAdminPermission]
+    
+    def patch(self, request, quote_id):
+        """
+        Update admin override price for a specific package quote.
+        
+        Request body:
+        {
+            "admin_override_price": 1500.00  # or null to remove override
+        }
+        """
+        quote = get_object_or_404(CustomerPackageQuote, id=quote_id)
+        
+        new_price = request.data.get('admin_override_price')
+        edited_by = request.data.get('edited_by', request.user.username if hasattr(request.user, 'username') else 'admin')
+        
+        try:
+            with transaction.atomic():
+                if new_price is None or new_price == '':
+                    # Remove override - use calculated price
+                    quote.admin_override_price = None
+                    quote.admin_override_set_at = None
+                    quote.admin_override_set_by = None
+                else:
+                    quote.admin_override_price = Decimal(str(new_price))
+                    quote.admin_override_set_at = timezone.now()
+                    quote.admin_override_set_by = edited_by
+                
+                quote.save()
+                
+                # Recalculate submission totals since package price changed
+                submission = quote.service_selection.submission
+                
+                # Reuse the calculation method from SubmitFinalQuoteView
+                submit_view = SubmitFinalQuoteView()
+                submit_view._calculate_final_totals_new(submission)
+                
+                return Response({
+                    'message': 'Package price updated successfully',
+                    'quote_id': str(quote.id),
+                    'package_name': quote.package.name,
+                    'service_name': quote.service_selection.service.name,
+                    'original_total_price': float(quote.total_price),
+                    'admin_override_price': float(quote.admin_override_price) if quote.admin_override_price else None,
+                    'effective_total_price': float(quote.effective_total_price),
+                    'submission_final_total': float(submission.final_total),
+                    'service_selection_id': str(quote.service_selection.id)
+                }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 

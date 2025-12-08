@@ -285,6 +285,17 @@ class CustomerPackageQuote(models.Model):
     surcharge_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
     
+    # Admin price override (per package)
+    admin_override_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True,
+        help_text="Admin override price for this specific package. If set, this will be used instead of calculated total_price"
+    )
+    admin_override_set_at = models.DateTimeField(null=True, blank=True)
+    admin_override_set_by = models.CharField(max_length=100, null=True, blank=True)
+    
     # Features breakdown
     included_features = models.JSONField(default=list)  # List of included feature IDs
     excluded_features = models.JSONField(default=list)  # List of excluded feature IDs
@@ -297,3 +308,8 @@ class CustomerPackageQuote(models.Model):
     class Meta:
         db_table = 'customer_package_quotes'
         unique_together = ['service_selection', 'package']
+    
+    @property
+    def effective_total_price(self):
+        """Returns admin override price if set, otherwise calculated total_price"""
+        return self.admin_override_price if self.admin_override_price is not None else self.total_price

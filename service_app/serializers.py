@@ -8,7 +8,7 @@ from .models import (
     Order, OrderQuestionAnswer,ServiceSettings, QuestionResponse, SubQuestion, SubQuestionPricing, SubQuestionResponse,
     OptionResponse,AddOnService,QuantityDiscount,Coupon
 )
-from quote_app.models import CustomerSubmission
+from quote_app.models import CustomerSubmission, CustomerMeasurementResponse
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -488,19 +488,68 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         
-        # Handle options update (simple approach - recreate all)
+        # Handle options update with preservation of measurement responses
         if options_data:
-            instance.options.all().delete()
             question_type = instance.question_type
-            for option_data in options_data:
-                # Remove 'question' from option_data if present to avoid duplicate argument
-                option_data.pop('question', None)
-                # Remove 'pricing_rules' if present (it's read-only)
-                option_data.pop('pricing_rules', None)
-                # Skip options with blank option_text for measurement questions
-                if question_type == 'measurement' and not option_data.get('option_text', '').strip():
-                    continue
-                QuestionOption.objects.create(question=instance, **option_data)
+            
+            # For measurement questions, preserve measurement responses by updating options intelligently
+            if question_type == 'measurement':
+                # Get existing options before any changes
+                existing_options = {opt.id: opt for opt in instance.options.all()}
+                processed_option_ids = set()
+                
+                # Process each new option
+                for option_data in options_data:
+                    # Remove 'question' from option_data if present to avoid duplicate argument
+                    option_data.pop('question', None)
+                    # Remove 'pricing_rules' if present (it's read-only)
+                    option_data.pop('pricing_rules', None)
+                    # Skip options with blank option_text for measurement questions
+                    option_text = option_data.get('option_text', '').strip()
+                    if not option_text:
+                        continue
+                    
+                    option_order = option_data.get('order', 0)
+                    
+                    # Try to find existing option with same text and order
+                    existing_option = None
+                    for opt_id, opt in existing_options.items():
+                        if opt.option_text == option_text and opt.order == option_order:
+                            existing_option = opt
+                            break
+                    
+                    if existing_option:
+                        # Update existing option (preserves ID and measurement responses)
+                        for key, value in option_data.items():
+                            setattr(existing_option, key, value)
+                        existing_option.save()
+                        processed_option_ids.add(existing_option.id)
+                    else:
+                        # Create new option
+                        new_option = QuestionOption.objects.create(question=instance, **option_data)
+                        processed_option_ids.add(new_option.id)
+                
+                # Delete only options that weren't processed and don't have measurement responses
+                for opt_id, opt in existing_options.items():
+                    if opt_id not in processed_option_ids:
+                        # Check if this option has any measurement responses
+                        has_measurements = CustomerMeasurementResponse.objects.filter(
+                            option=opt
+                        ).exists()
+                        
+                        if not has_measurements:
+                            # Safe to delete - no measurement responses reference it
+                            opt.delete()
+                        # If it has measurements, keep it to preserve the data
+            else:
+                # For non-measurement questions, delete all options (original behavior)
+                instance.options.all().delete()
+                for option_data in options_data:
+                    # Remove 'question' from option_data if present to avoid duplicate argument
+                    option_data.pop('question', None)
+                    # Remove 'pricing_rules' if present (it's read-only)
+                    option_data.pop('pricing_rules', None)
+                    QuestionOption.objects.create(question=instance, **option_data)
         
         # Handle sub-questions update (simple approach - recreate all)
         if sub_questions_data:
