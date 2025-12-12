@@ -19,27 +19,48 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         # Step 1: Determine search URL
         if submission.ghl_contact_id:
+            # If we have a GHL contact ID, fetch directly
             search_url = f"https://services.leadconnectorhq.com/contacts/{submission.ghl_contact_id}"
+            search_response = requests.get(search_url, headers=headers)
+            if search_response.status_code == 200:
+                search_data = search_response.json()
+                if "contact" in search_data and isinstance(search_data["contact"], dict):
+                    results = [search_data["contact"]]
         else:
-            search_query = submission.customer_email or submission.customer_phone
-            if not search_query:
-                print("No identifier to search GHL contact.")
+            # Step 2: Search by email first (if available)
+            if submission.customer_email:
+                search_url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&query={submission.customer_email}"
+                search_response = requests.get(search_url, headers=headers)
+                if search_response.status_code == 200:
+                    search_data = search_response.json()
+                    # Handle both cases: list of contacts or single contact
+                    if "contacts" in search_data and isinstance(search_data["contacts"], list):
+                        results = search_data["contacts"]
+                    elif "contact" in search_data and isinstance(search_data["contact"], dict):
+                        results = [search_data["contact"]]
+            
+            # Step 3: If no results from email search, search by phone (if available)
+            if not results and submission.customer_phone:
+                search_url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&query={submission.customer_phone}"
+                search_response = requests.get(search_url, headers=headers)
+                if search_response.status_code == 200:
+                    search_data = search_response.json()
+                    # Handle both cases: list of contacts or single contact
+                    if "contacts" in search_data and isinstance(search_data["contacts"], list):
+                        results = search_data["contacts"]
+                    elif "contact" in search_data and isinstance(search_data["contact"], dict):
+                        results = [search_data["contact"]]
+            
+            # If still no results and no identifiers, return early
+            if not results and not submission.customer_email and not submission.customer_phone:
+                print("No identifier (email or phone) to search GHL contact.")
                 return
-            search_url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&query={search_query}"
-
-        # Step 2: Fetch existing contact
-        search_response = requests.get(search_url, headers=headers)
-        if search_response.status_code != 200:
-            print("Failed to search GHL contact:", search_response.text)
-            return
-
-        search_data = search_response.json()
-
-        # Handle both cases: list of contacts or single contact
-        if "contacts" in search_data and isinstance(search_data["contacts"], list):
-            results = search_data["contacts"]
-        elif "contact" in search_data and isinstance(search_data["contact"], dict):
-            results = [search_data["contact"]]
+            
+            # Log search results
+            if results:
+                print(f"Found existing GHL contact by {'email' if submission.customer_email and not submission.customer_phone else 'phone' if submission.customer_phone else 'identifier'}: {results[0].get('id')}")
+            else:
+                print("No existing GHL contact found, will create new one.")
 
         # --- Build custom fields payload ---
         # Booking/Quote link
@@ -131,7 +152,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             )
 
         else:
-   
+            # No existing contact found, create new one
             contact_payload = {
                 "firstName": submission.first_name,
                 "lastName": submission.last_name,
@@ -147,6 +168,59 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                 json=contact_payload,
                 headers=headers
             )
+            
+            # Handle duplicate contact error - try to find and update existing contact
+            if contact_response.status_code == 400:
+                error_data = contact_response.json()
+                if "duplicated contacts" in error_data.get("message", "").lower():
+                    # Extract contact ID from error if available
+                    contact_id_from_error = error_data.get("meta", {}).get("contactId")
+                    if contact_id_from_error:
+                        print(f"Duplicate contact detected. Updating existing contact: {contact_id_from_error}")
+                        # Fetch the existing contact
+                        fetch_url = f"https://services.leadconnectorhq.com/contacts/{contact_id_from_error}"
+                        fetch_response = requests.get(fetch_url, headers=headers)
+                        if fetch_response.status_code == 200:
+                            # Update the existing contact instead
+                            existing_tags = fetch_response.json().get("contact", {}).get("tags", [])
+                            if isinstance(existing_tags, str):
+                                existing_tags = [existing_tags]
+                            
+                            new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
+                            if is_declined:
+                                new_tags.append("quote_declined")
+                            
+                            updated_tags = list(set(existing_tags + new_tags))
+                            
+                            update_payload = {
+                                "firstName": submission.first_name,
+                                "lastName": submission.last_name,
+                                "address1": submission.street_address,
+                                "customFields": custom_fields,
+                                "tags": updated_tags
+                            }
+                            
+                            # Update email/phone if they're different
+                            existing_contact = fetch_response.json().get("contact", {})
+                            if submission.customer_email and existing_contact.get("email") != submission.customer_email:
+                                update_payload["email"] = submission.customer_email
+                            if submission.customer_phone and existing_contact.get("phone") != submission.customer_phone:
+                                update_payload["phone"] = submission.customer_phone
+                            
+                            contact_response = requests.put(
+                                f"https://services.leadconnectorhq.com/contacts/{contact_id_from_error}",
+                                json=update_payload,
+                                headers=headers
+                            )
+                            
+                            if contact_response.status_code in [200, 201]:
+                                submission.ghl_contact_id = contact_id_from_error
+                                submission.save()
+                                print(f"Contact updated successfully after duplicate detection: {contact_id_from_error}")
+                                return
+                    else:
+                        print("Duplicate contact error but no contact ID provided in error response")
+                        return
 
         if contact_response.status_code not in [200, 201]:
             print("Failed to create/update contact in GHL:", contact_response.text)
