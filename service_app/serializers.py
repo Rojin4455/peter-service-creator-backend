@@ -13,10 +13,139 @@ from quote_app.models import CustomerSubmission, CustomerMeasurementResponse
 
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model"""
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_admin', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name', 
+            'is_admin', 'is_super_admin', 'is_active', 
+            'created_by', 'created_by_username', 'created_at',
+            'can_access_dashboard', 'can_access_reports', 'can_access_service_management',
+            'can_access_location', 'can_access_house_size_management', 'can_access_addon_service',
+            'can_access_coupon', 'can_access_on_the_go_calculator'
+        ]
+        read_only_fields = ['id', 'created_at', 'is_super_admin', 'created_by']
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Serializer for listing admin users"""
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'is_admin', 'is_super_admin', 'is_active',
+            'created_by_username', 'created_at', 'last_login',
+            'can_access_dashboard', 'can_access_reports', 'can_access_service_management',
+            'can_access_location', 'can_access_house_size_management', 'can_access_addon_service',
+            'can_access_coupon', 'can_access_on_the_go_calculator'
+        ]
+        read_only_fields = ['id', 'created_at', 'last_login']
+
+
+class AdminUserCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating admin users"""
+    password = serializers.CharField(write_only=True, required=True, min_length=8)
+    email = serializers.EmailField(required=True)
+    
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'password', 'first_name', 'last_name',
+            'can_access_dashboard', 'can_access_reports', 'can_access_service_management',
+            'can_access_location', 'can_access_house_size_management', 'can_access_addon_service',
+            'can_access_coupon', 'can_access_on_the_go_calculator'
+        ]
+        extra_kwargs = {
+            'username': {'required': True},
+            'email': {'required': True},
+            'can_access_dashboard': {'required': False},
+            'can_access_reports': {'required': False},
+            'can_access_service_management': {'required': False},
+            'can_access_location': {'required': False},
+            'can_access_house_size_management': {'required': False},
+            'can_access_addon_service': {'required': False},
+            'can_access_coupon': {'required': False},
+            'can_access_on_the_go_calculator': {'required': False},
+        }
+    
+    def validate_email(self, value):
+        """Check if email already exists"""
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+    
+    def validate_username(self, value):
+        """Check if username already exists"""
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("A user with this username already exists.")
+        return value
+    
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        user = User.objects.create_user(
+            **validated_data,
+            is_admin=True,
+            is_staff=True,
+            created_by=self.context['request'].user
+        )
+        user.set_password(password)
+        user.save()
+        return user
+
+
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating admin users (block/unblock, change password, permissions)"""
+    password = serializers.CharField(write_only=True, required=False, min_length=8, allow_blank=True)
+    
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'first_name', 'last_name', 'is_active', 'password',
+            'can_access_dashboard', 'can_access_reports', 'can_access_service_management',
+            'can_access_location', 'can_access_house_size_management', 'can_access_addon_service',
+            'can_access_coupon', 'can_access_on_the_go_calculator'
+        ]
+        extra_kwargs = {
+            'username': {'required': False},
+            'email': {'required': False},
+            'can_access_dashboard': {'required': False},
+            'can_access_reports': {'required': False},
+            'can_access_service_management': {'required': False},
+            'can_access_location': {'required': False},
+            'can_access_house_size_management': {'required': False},
+            'can_access_addon_service': {'required': False},
+            'can_access_coupon': {'required': False},
+            'can_access_on_the_go_calculator': {'required': False},
+        }
+    
+    def validate_email(self, value):
+        """Check if email already exists (excluding current user)"""
+        if self.instance and User.objects.filter(email=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+    
+    def validate_username(self, value):
+        """Check if username already exists (excluding current user)"""
+        if self.instance and User.objects.filter(username=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A user with this username already exists.")
+        return value
+    
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        
+        # Update password if provided
+        if password:
+            instance.set_password(password)
+        
+        # Update other fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        instance.save()
+        return instance
 
 
 class LoginSerializer(serializers.Serializer):

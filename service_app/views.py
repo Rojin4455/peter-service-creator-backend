@@ -32,7 +32,8 @@ from .serializers import (
     PackageWithFeaturesSerializer, BulkPricingUpdateSerializer,
     ServiceAnalyticsSerializer, SubQuestionPricingSerializer,BulkSubQuestionPricingSerializer,QuestionResponseSerializer,
     PricingCalculationSerializer, SubQuestionSerializer,AddOnServiceSerializer,QuantityDiscountSerializer,ServicePackageSizeMappingNewSerializer,
-    GlobalSizePackageSerializer,ServicePackageSizeMappingSerializer,PropertyTypeSerializer, CouponSerializer
+    GlobalSizePackageSerializer,ServicePackageSizeMappingSerializer,PropertyTypeSerializer, CouponSerializer,
+    AdminUserListSerializer, AdminUserCreateSerializer, AdminUserUpdateSerializer
 )
 
 
@@ -52,13 +53,78 @@ class IsAdminPermission(permissions.BasePermission):
     
     def has_permission(self, request, view):
         return request.user and request.user.is_authenticated and request.user.is_admin
+
+
+class IsSuperAdminPermission(permissions.BasePermission):
+    """Custom permission to only allow super admins to access views"""
+    
+    def has_permission(self, request, view):
+        return (
+            request.user and 
+            request.user.is_authenticated and 
+            request.user.is_super_admin
+        )
+
+
+class IsAdminOrSuperAdminPermission(permissions.BasePermission):
+    """Custom permission to allow both admins and super admins to access views"""
+    
+    def has_permission(self, request, view):
+        return (
+            request.user and 
+            request.user.is_authenticated and 
+            (request.user.is_admin or request.user.is_super_admin)
+        )
     
 
 
 class AdminTokenObtainPairView(TokenObtainPairView):
     permission_classes = [AllowAny]
-    print('here')
-    # permission_classes = [IsAdminUser]
+    
+    def post(self, request, *args, **kwargs):
+        """Override post method to include user data in response"""
+        serializer = self.get_serializer(data=request.data)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception as e:
+            # Handle validation errors
+            error_detail = str(e)
+            if hasattr(e, 'detail'):
+                error_detail = e.detail
+            return Response({
+                'error': 'Invalid credentials',
+                'detail': error_detail
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get the user from serializer (available after validation)
+        user = serializer.user
+        
+        # Check if user is an admin
+        if not user.is_admin:
+            return Response({
+                'error': 'Only admins can access this interface.'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if user is active
+        if not user.is_active:
+            return Response({
+                'error': 'User account is disabled.'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get tokens from serializer validated data
+        tokens = serializer.validated_data
+        
+        # Serialize user data with all permission fields
+        user_data = UserSerializer(user).data
+        
+        # Return tokens and user data
+        return Response({
+            'access': tokens['access'],
+            'refresh': tokens['refresh'],
+            'user': user_data,
+            'message': 'Login successful'
+        }, status=status.HTTP_200_OK)
 
 class AdminTokenRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
@@ -1889,3 +1955,176 @@ class YearlyAnalyticsAPIView(APIView):
         }
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+# ==================================================
+# Admin Management Views (Super Admin Only)
+# ==================================================
+
+class AdminUserListCreateView(generics.ListCreateAPIView):
+    """
+    List all admin users or create a new admin user.
+    Only accessible by super admins.
+    
+    GET /api/service/admins/
+    - Returns list of all admin users
+    
+    POST /api/service/admins/
+    - Creates a new admin user
+    - Required fields: username, email, password
+    - Optional fields: first_name, last_name
+    """
+    permission_classes = [IsSuperAdminPermission]
+    queryset = User.objects.filter(is_admin=True).order_by('-created_at')
+    
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AdminUserCreateSerializer
+        return AdminUserListSerializer
+    
+    def get_queryset(self):
+        """Exclude super admins from the list (only show regular admins)"""
+        return User.objects.filter(is_admin=True, is_super_admin=False).order_by('-created_at')
+    
+    def perform_create(self, serializer):
+        """Create admin user with the current super admin as creator"""
+        serializer.save()
+
+
+class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete an admin user.
+    Only accessible by super admins.
+    
+    GET /api/service/admins/<id>/
+    - Get admin user details
+    
+    PUT /api/service/admins/<id>/
+    - Update admin user (username, email, first_name, last_name, is_active)
+    
+    PATCH /api/service/admins/<id>/
+    - Partial update admin user
+    
+    DELETE /api/service/admins/<id>/
+    - Delete admin user (cannot delete yourself)
+    """
+    permission_classes = [IsSuperAdminPermission]
+    queryset = User.objects.filter(is_admin=True)
+    serializer_class = AdminUserUpdateSerializer
+    
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return AdminUserUpdateSerializer
+        return AdminUserListSerializer
+    
+    def get_queryset(self):
+        """Exclude super admins from being modified"""
+        return User.objects.filter(is_admin=True, is_super_admin=False)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Prevent super admin from deleting themselves"""
+        instance = self.get_object()
+        if instance.id == request.user.id:
+            return Response(
+                {"error": "You cannot delete your own account."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class AdminUserBlockView(APIView):
+    """
+    Block an admin user.
+    Only accessible by super admins.
+    
+    POST /api/service/admins/<id>/block/
+    - Block an admin user (set is_active=False)
+    """
+    permission_classes = [IsSuperAdminPermission]
+    
+    def post(self, request, admin_id):
+        """Block an admin user"""
+        try:
+            admin_user = User.objects.get(id=admin_id, is_admin=True, is_super_admin=False)
+            if admin_user.id == request.user.id:
+                return Response(
+                    {"error": "You cannot block your own account."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            admin_user.is_active = False
+            admin_user.save()
+            return Response({
+                "message": f"Admin user '{admin_user.username}' has been blocked.",
+                "user": AdminUserListSerializer(admin_user).data
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Admin user not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class AdminUserUnblockView(APIView):
+    """
+    Unblock an admin user.
+    Only accessible by super admins.
+    """
+    permission_classes = [IsSuperAdminPermission]
+    
+    def post(self, request, admin_id):
+        """Unblock an admin user"""
+        try:
+            admin_user = User.objects.get(id=admin_id, is_admin=True, is_super_admin=False)
+            admin_user.is_active = True
+            admin_user.save()
+            return Response({
+                "message": f"Admin user '{admin_user.username}' has been unblocked.",
+                "user": AdminUserListSerializer(admin_user).data
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Admin user not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class AdminUserChangePasswordView(APIView):
+    """
+    Change password for an admin user.
+    Only accessible by super admins.
+    
+    POST /api/service/admins/<id>/change-password/
+    - Change admin user's password
+    - Required field: password (min 8 characters)
+    """
+    permission_classes = [IsSuperAdminPermission]
+    
+    def post(self, request, admin_id):
+        """Change admin user's password"""
+        try:
+            admin_user = User.objects.get(id=admin_id, is_admin=True, is_super_admin=False)
+            password = request.data.get('password')
+            
+            if not password:
+                return Response(
+                    {"error": "Password is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if len(password) < 8:
+                return Response(
+                    {"error": "Password must be at least 8 characters long."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            admin_user.set_password(password)
+            admin_user.save()
+            
+            return Response({
+                "message": f"Password for admin user '{admin_user.username}' has been changed successfully."
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Admin user not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )

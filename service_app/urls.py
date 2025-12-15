@@ -151,4 +151,13 @@ urlpatterns = [
     # Global coupons endpoint (AllowAny - accessible by anyone)
     path('coupons/global/', views.GlobalCouponListView.as_view(), name='global-coupons-list'),
 
+    # ============================================================================
+    # ADMIN MANAGEMENT (Super Admin Only)
+    # ============================================================================
+    path('admins/', views.AdminUserListCreateView.as_view(), name='admin-list-create'),
+    path('admins/<int:pk>/', views.AdminUserDetailView.as_view(), name='admin-detail'),
+    path('admins/<int:admin_id>/block/', views.AdminUserBlockView.as_view(), name='admin-block'),
+    path('admins/<int:admin_id>/unblock/', views.AdminUserUnblockView.as_view(), name='admin-unblock'),
+    path('admins/<int:admin_id>/change-password/', views.AdminUserChangePasswordView.as_view(), name='admin-change-password'),
+
 ]+ router.urls

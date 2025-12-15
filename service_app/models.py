@@ -18,8 +18,27 @@ def validate_image_or_svg(value):
 class User(AbstractUser):
     """Extended User model for admin authentication"""
     is_admin = models.BooleanField(default=False)
+    is_super_admin = models.BooleanField(default=False, help_text="Super admin can manage other admins")
+    created_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_admins',
+        help_text="Admin who created this user"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Admin panel section access permissions (only super admin can set these)
+    can_access_dashboard = models.BooleanField(default=True, help_text="Access to dashboard section")
+    can_access_reports = models.BooleanField(default=False, help_text="Access to reports section")
+    can_access_service_management = models.BooleanField(default=False, help_text="Access to service management section")
+    can_access_location = models.BooleanField(default=False, help_text="Access to location management section")
+    can_access_house_size_management = models.BooleanField(default=False, help_text="Access to house size management section")
+    can_access_addon_service = models.BooleanField(default=False, help_text="Access to add-on service management section")
+    can_access_coupon = models.BooleanField(default=False, help_text="Access to coupon section")
+    can_access_on_the_go_calculator = models.BooleanField(default=False, help_text="Access to on-the-go calculator section")
 
     class Meta:
         db_table = 'auth_user'

@@ -34,7 +34,7 @@ from .serializers import (
 from service_app.serializers import GlobalSizePackageSerializer
 
 
-from quote_app.helpers import create_or_update_ghl_contact
+from quote_app.helpers import create_or_update_ghl_contact, add_quote_drafted_tag_to_ghl
 
 # Step 1: Get initial data (locations, services, size ranges)
 class InitialDataView(APIView):
@@ -68,6 +68,11 @@ class CustomerSubmissionCreateView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         submission = serializer.save()
+        
+        # Add "quote drafted" tag to GHL contact
+        if not submission.is_on_the_go:
+            add_quote_drafted_tag_to_ghl(submission)
+        
         return Response({
             "submission_id": str(submission.id),
             "message": "Customer information saved successfully"
