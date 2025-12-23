@@ -1366,12 +1366,16 @@ class SubmitServiceResponsesView(APIView):
             conditional_questions_by_parent[parent_id].append(q)
         
         for selection in service_selections:
-            # Check if this service has any question responses
-            if not selection.question_responses.exists():
-                return False
-            
             # Get root questions for this service from pre-fetched dict
             root_questions = root_questions_by_service.get(selection.service_id, [])
+            
+            # If service has no questions, it's automatically considered complete
+            if not root_questions:
+                continue
+            
+            # If service has questions but no responses, it's not complete
+            if not selection.question_responses.exists():
+                return False
             
             # Check if all root questions have responses
             answered_question_ids = set(
@@ -1867,6 +1871,18 @@ class EditServiceResponsesView(APIView):
                     submission.edit_history = []
                 submission.edit_history.append(edit_history_entry)
                 
+                # Check if all services are completed after edit and update status accordingly
+                # Only update status if it was 'submitted' or 'approved' before editing
+                if submission.status in ['submitted', 'approved']:
+                    all_services_completed = self._check_all_services_completed_optimized(submission)
+                    if all_services_completed:
+                        # If it was 'approved', keep it as 'approved', otherwise set to 'submitted'
+                        if submission.status != 'approved':
+                            submission.status = 'submitted'
+                    else:
+                        # If not all services completed, set back to 'draft'
+                        submission.status = 'draft'
+                
                 submission.save()
                 
                 # Update GHL contact if needed
@@ -1982,6 +1998,111 @@ class EditServiceResponsesView(APIView):
             submission.original_final_total = submission.final_total
         
         submission.save()
+    
+    def _check_all_services_completed_optimized(self, submission):
+        """Check if all selected services have responses - OPTIMIZED"""
+        from quote_app.models import Question
+        
+        service_selections = submission.customerserviceselection_set.all().prefetch_related(
+            'question_responses__question',
+            'service'
+        )
+        
+        # OPTIMIZATION: Prefetch all root questions for all services at once
+        service_ids = [ss.service_id for ss in service_selections]
+        all_root_questions = Question.objects.filter(
+            service_id__in=service_ids,
+            is_active=True,
+            parent_question__isnull=True
+        ).select_related('service')
+        
+        # Organize questions by service
+        root_questions_by_service = {}
+        for q in all_root_questions:
+            service_id = q.service_id
+            if service_id not in root_questions_by_service:
+                root_questions_by_service[service_id] = []
+            root_questions_by_service[service_id].append(q)
+        
+        # OPTIMIZATION: Prefetch all conditional questions at once
+        root_question_ids = [q.id for q in all_root_questions]
+        all_conditional_questions = Question.objects.filter(
+            parent_question_id__in=root_question_ids,
+            is_active=True
+        ).select_related('parent_question', 'service')
+        
+        # Organize conditional questions by parent
+        conditional_questions_by_parent = {}
+        for q in all_conditional_questions:
+            parent_id = q.parent_question_id
+            if parent_id not in conditional_questions_by_parent:
+                conditional_questions_by_parent[parent_id] = []
+            conditional_questions_by_parent[parent_id].append(q)
+        
+        for selection in service_selections:
+            # Get root questions for this service from pre-fetched dict
+            root_questions = root_questions_by_service.get(selection.service_id, [])
+            
+            # If service has no questions, it's automatically considered complete
+            if not root_questions:
+                continue
+            
+            # If service has questions but no responses, it's not complete
+            if not selection.question_responses.exists():
+                return False
+            
+            # Check if all root questions have responses
+            answered_question_ids = set(
+                selection.question_responses.values_list('question_id', flat=True)
+            )
+            
+            for root_question in root_questions:
+                if root_question.id not in answered_question_ids:
+                    return False
+                
+                # Get conditional questions from pre-fetched dict
+                conditional_questions = conditional_questions_by_parent.get(root_question.id, [])
+                
+                for conditional_question in conditional_questions:
+                    # Check if condition is met
+                    root_response = selection.question_responses.filter(
+                        question=root_question
+                    ).first()
+                    
+                    if self._should_conditional_question_be_answered(
+                        conditional_question, root_response
+                    ):
+                        if conditional_question.id not in answered_question_ids:
+                            return False
+        
+        return True
+
+    def _should_conditional_question_be_answered(self, conditional_question, parent_response):
+        """Check if a conditional question should be answered based on parent response"""
+        if not parent_response:
+            return False
+        
+        parent_question = conditional_question.parent_question
+        
+        # For yes/no parent questions
+        if parent_question.question_type == 'yes_no':
+            expected_answer = conditional_question.condition_answer
+            actual_answer = 'yes' if parent_response.yes_no_answer else 'no'
+            return expected_answer == actual_answer
+        
+        # For option-based parent questions
+        elif parent_question.question_type in ['describe', 'quantity']:
+            if conditional_question.condition_option:
+                selected_options = parent_response.option_responses.all()
+                selected_option_ids = [opt.option.id for opt in selected_options]
+                return conditional_question.condition_option.id in selected_option_ids
+        
+        # For multiple_yes_no parent questions
+        elif parent_question.question_type == 'multiple_yes_no':
+            sub_responses = parent_response.sub_question_responses.all()
+            return any(sub.answer for sub in sub_responses)
+        
+        return False
     
     def _capture_responses_snapshot(self, service_selection):
         """Capture current state of responses for history tracking"""
