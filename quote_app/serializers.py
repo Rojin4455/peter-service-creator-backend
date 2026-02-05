@@ -9,7 +9,7 @@ from service_app.models import (
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerMeasurementResponse,
-    CustomerPackageQuote,SubmissionAddOn,CustomerAvailability
+    CustomerPackageQuote, SubmissionAddOn, CustomerAvailability, SubmissionImage,
 )
 
 from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
@@ -579,3 +579,12 @@ class SubmissionNotesUpdateSerializer(serializers.ModelSerializer):
             # Allow empty strings to clear notes
             pass
         return data
+
+
+class SubmissionImageSerializer(serializers.ModelSerializer):
+    """Serializer for quote submission images (URL + metadata from GHL media)."""
+
+    class Meta:
+        model = SubmissionImage
+        fields = ["id", "url", "file_id", "trace_id", "created_at"]
+        read_only_fields = ["id", "url", "file_id", "trace_id", "created_at"]

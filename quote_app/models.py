@@ -120,7 +120,27 @@ class CustomerSubmission(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} - {self.customer_email}"
-    
+
+
+class SubmissionImage(models.Model):
+    """Images attached to a quote (submission), stored in GHL media; we store url and file_id."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.ForeignKey(
+        CustomerSubmission,
+        on_delete=models.CASCADE,
+        related_name="images"
+    )
+    url = models.URLField(max_length=1000, help_text="Public URL of the image (from GHL media storage)")
+    file_id = models.CharField(max_length=100, help_text="GHL media file ID, used for delete API")
+    trace_id = models.CharField(max_length=100, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "submission_images"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Image {self.file_id} for submission {self.submission_id}"
 
 
 class CustomerAvailability(models.Model):

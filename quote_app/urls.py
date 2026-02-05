@@ -30,6 +30,14 @@ urlpatterns = [
     
     # Admin endpoint to update submission notes
     path('<uuid:submission_id>/notes/', views.UpdateSubmissionNotesView.as_view(), name='update-submission-notes'),
+
+    # Update submission sqft and recalculate package prices (same logic as submit-responses)
+    path('<uuid:submission_id>/sqft/', views.UpdateSubmissionSqftView.as_view(), name='update-submission-sqft'),
+
+    # Quote images (GHL media): list, upload, delete
+    path('<uuid:submission_id>/images/', views.ListQuoteImagesView.as_view(), name='quote-images-list'),
+    path('<uuid:submission_id>/images/upload/', views.UploadQuoteImageView.as_view(), name='quote-images-upload'),
+    path('<uuid:submission_id>/images/<uuid:image_id>/', views.DeleteQuoteImageView.as_view(), name='quote-images-delete'),
     
     # Admin endpoint to update package price
     path('package-quotes/<uuid:quote_id>/price/', views.UpdatePackagePriceView.as_view(), name='update-package-price'),

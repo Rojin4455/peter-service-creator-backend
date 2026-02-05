@@ -380,3 +380,57 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
         print(f"Error syncing contact: {e}")
 
 
+def upload_file_to_ghl_media(file, parent_id):
+    """
+    Upload a file to GHL media storage.
+    :param file: Django UploadedFile (e.g. request.FILES['file'])
+    :param parent_id: GHL location ID (parentId in API)
+    :return: dict with fileId, url, traceId on success; None on failure
+    """
+    credentials = GHLAuthCredentials.objects.first()
+    if not credentials:
+        return None
+    token = credentials.access_token
+    headers = {
+        "Accept": "application/json",
+        "Version": "2021-07-28",
+        "Authorization": f"Bearer {token}",
+    }
+    url = "https://services.leadconnectorhq.com/medias/upload-file"
+    data = {"parentId": parent_id}
+    files = {"file": (file.name, file, file.content_type or "application/octet-stream")}
+    try:
+        resp = requests.post(url, headers=headers, data=data, files=files, timeout=30)
+        if resp.status_code not in (200, 201):
+            return None
+        return resp.json()
+    except Exception as e:
+        print(f"GHL media upload error: {e}")
+        return None
+
+
+def delete_file_from_ghl_media(file_id, location_id):
+    """
+    Delete a file from GHL media storage.
+    :param file_id: GHL media file ID
+    :param location_id: GHL location ID (altId in query)
+    :return: True if delete succeeded, False otherwise
+    """
+    credentials = GHLAuthCredentials.objects.first()
+    if not credentials:
+        return False
+    token = credentials.access_token
+    headers = {
+        "Version": "2021-07-28",
+        "Authorization": f"Bearer {token}",
+    }
+    url = f"https://services.leadconnectorhq.com/medias/{file_id}"
+    params = {"altType": "location", "altId": location_id}
+    try:
+        resp = requests.delete(url, headers=headers, params=params, timeout=15)
+        return resp.status_code in (200, 204)
+    except Exception as e:
+        print(f"GHL media delete error: {e}")
+        return False
+
+

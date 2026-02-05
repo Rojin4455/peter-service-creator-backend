@@ -21,20 +21,20 @@ from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerMeasurementResponse,
-    CustomerPackageQuote, SubmissionAddOn,CustomerAvailability
+    CustomerPackageQuote, SubmissionAddOn, CustomerAvailability, SubmissionImage,
 )
 from .serializers import (
     LocationPublicSerializer, ServicePublicSerializer, PackagePublicSerializer,
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,SubmissionAddOnSerializer,
-    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer,SubmissionNotesUpdateSerializer
+    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer,SubmissionNotesUpdateSerializer,SubmissionImageSerializer
 )
 
 from service_app.serializers import GlobalSizePackageSerializer
 
 
-from quote_app.helpers import create_or_update_ghl_contact, add_quote_drafted_tag_to_ghl
+from quote_app.helpers import create_or_update_ghl_contact, add_quote_drafted_tag_to_ghl, upload_file_to_ghl_media, delete_file_from_ghl_media
 
 # Step 1: Get initial data (locations, services, size ranges)
 class InitialDataView(APIView):
@@ -1478,6 +1478,130 @@ class UpdateSubmissionNotesView(APIView):
             }, status=status.HTTP_200_OK)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UpdateSubmissionSqftView(APIView):
+    """
+    Update submission size (size_range and/or actual_sqft) and recalculate package
+    quotes for all services using the same logic as submit-responses.
+    """
+    permission_classes = [AllowAny]
+
+    def patch(self, request, submission_id):
+        print("submission_id: ", submission_id)
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        size_range_id = request.data.get("size_range")
+        actual_sqft = request.data.get("actual_sqft")
+        print("size_range_id: ", size_range_id)
+        print("actual_sqft: ", actual_sqft)
+        if size_range_id is None and actual_sqft is None:
+            return Response(
+                {"error": "Provide at least one of: size_range, actual_sqft"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if size_range_id is not None:
+            size_range = get_object_or_404(GlobalSizePackage, id=size_range_id)
+            submission.size_range = size_range
+        if actual_sqft is not None:
+            submission.actual_sqft = actual_sqft if actual_sqft != "" else None
+        submission.save()
+
+        submit_responses_view = SubmitServiceResponsesView()
+        submit_final_view = SubmitFinalQuoteView()
+
+        with transaction.atomic():
+            for service_selection in submission.customerserviceselection_set.all().select_related("service"):
+                previously_selected_package_id = service_selection.selected_package_id
+                submit_responses_view._generate_all_package_quotes(service_selection, submission)
+                if previously_selected_package_id:
+                    new_quote = service_selection.package_quotes.filter(
+                        package_id=previously_selected_package_id
+                    ).first()
+                    if new_quote:
+                        service_selection.package_quotes.update(is_selected=False)
+                        new_quote.is_selected = True
+                        new_quote.save()
+                        service_selection.final_base_price = new_quote.base_price + new_quote.sqft_price
+                        service_selection.final_sqft_price = new_quote.sqft_price
+                        service_selection.final_total_price = new_quote.total_price
+                        service_selection.save()
+
+            submit_final_view._calculate_final_totals_new(submission)
+
+        return Response(
+            {
+                "message": "Sqft updated and package prices recalculated.",
+                "submission_id": str(submission.id),
+                "size_range": str(submission.size_range_id) if submission.size_range_id else None,
+                "actual_sqft": submission.actual_sqft,
+                "final_total": float(submission.final_total),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# Quote images (upload to GHL media, store URL in SubmissionImage)
+class ListQuoteImagesView(APIView):
+    """List images for a submission (quote)."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        images = submission.images.all()
+        serializer = SubmissionImageSerializer(images, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UploadQuoteImageView(APIView):
+    """Upload an image for a quote; file is stored in GHL media, URL saved in SubmissionImage."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            return Response(
+                {"error": "No file provided. Send multipart/form-data with key 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from accounts.models import GHLAuthCredentials
+        credentials = GHLAuthCredentials.objects.first()
+        if not credentials or not credentials.location_id:
+            return Response(
+                {"error": "GHL credentials or location ID not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        result = upload_file_to_ghl_media(uploaded_file, credentials.location_id)
+        if not result:
+            return Response(
+                {"error": "Failed to upload file to media storage."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        image = SubmissionImage.objects.create(
+            submission=submission,
+            url=result.get("url", ""),
+            file_id=result.get("fileId", ""),
+            trace_id=result.get("traceId"),
+        )
+        serializer = SubmissionImageSerializer(image)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class DeleteQuoteImageView(APIView):
+    """Delete a quote image: remove from GHL media and delete SubmissionImage."""
+    permission_classes = [AllowAny]
+
+    def delete(self, request, submission_id, image_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        image = get_object_or_404(SubmissionImage, id=image_id, submission=submission)
+        from accounts.models import GHLAuthCredentials
+        credentials = GHLAuthCredentials.objects.first()
+        location_id = credentials.location_id if credentials else None
+        if location_id:
+            delete_file_from_ghl_media(image.file_id, location_id)
+        image.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # Step 8: Submit final quote
