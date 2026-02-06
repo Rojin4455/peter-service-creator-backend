@@ -235,6 +235,16 @@ class MultipleAvailabilitySerializer(serializers.Serializer):
             raise serializers.ValidationError("You can select up to 2 availability options only.")
         return value
 
+
+class SubmissionImageSerializer(serializers.ModelSerializer):
+    """Serializer for quote submission images (URL + metadata from GHL media)."""
+
+    class Meta:
+        model = SubmissionImage
+        fields = ["id", "url", "file_id", "trace_id", "created_at"]
+        read_only_fields = ["id", "url", "file_id", "trace_id", "created_at"]
+
+
 from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
@@ -245,7 +255,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     # addons = SubmissionAddOnSerializer(many=True, read_only=True)
     addons = SubmissionAddOnSerializer(source='submission_addons', many=True, read_only=True)
     availabilities = CustomerAvailabilitySerializer(many=True, read_only=True)
-
+    images = SubmissionImageSerializer(many=True, read_only=True)
 
     applied_coupon = CouponSerializer(read_only=True)
     
@@ -285,7 +295,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'final_total', 'quote_surcharge_applicable',
 
             # Extra
-            'additional_data','total_addons_price','addons',
+            'additional_data','total_addons_price','addons','images',
 
             # Timestamps
             'created_at', 'updated_at', 'expires_at',
@@ -579,12 +589,3 @@ class SubmissionNotesUpdateSerializer(serializers.ModelSerializer):
             # Allow empty strings to clear notes
             pass
         return data
-
-
-class SubmissionImageSerializer(serializers.ModelSerializer):
-    """Serializer for quote submission images (URL + metadata from GHL media)."""
-
-    class Meta:
-        model = SubmissionImage
-        fields = ["id", "url", "file_id", "trace_id", "created_at"]
-        read_only_fields = ["id", "url", "file_id", "trace_id", "created_at"]
