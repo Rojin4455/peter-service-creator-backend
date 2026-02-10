@@ -13,6 +13,13 @@ urlpatterns = [
     
     # Step 3: Add services to submission
     path('<uuid:submission_id>/add-services/', views.AddServicesToSubmissionView.as_view(), name='add-services'),
+
+    # Remove a service from submission
+    path(
+        '<uuid:submission_id>/services/<uuid:service_id>/remove/',
+        views.RemoveServiceFromSubmissionView.as_view(),
+        name='remove-service-from-submission',
+    ),
     
     # Step 4: Get questions for a service
     path('services/<uuid:service_id>/questions/', views.ServiceQuestionsView.as_view(), name='service-questions'),

@@ -111,6 +111,63 @@ class AddServicesToSubmissionView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+
+class RemoveServiceFromSubmissionView(APIView):
+    """Remove a single service from a customer submission."""
+    permission_classes = [AllowAny]
+
+    def delete(self, request, submission_id, service_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+
+        # Once approved, the quote is treated as finalized.
+        if submission.status == "approved":
+            return Response(
+                {"error": "Cannot remove services from an approved submission."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        selection = get_object_or_404(
+            CustomerServiceSelection,
+            submission=submission,
+            service_id=service_id,
+        )
+
+        try:
+            with transaction.atomic():
+                # Cascades will remove question responses and package quotes.
+                selection.delete()
+
+                # Recompute whether the submission is fully completed.
+                submit_responses_view = SubmitServiceResponsesView()
+                all_services_completed = submit_responses_view._check_all_services_completed_optimized(submission)
+                submission.status = "submitted" if all_services_completed else "draft"
+
+                # Recompute surcharge flags (quote totals already include surcharges in package totals).
+                submission.quote_surcharge_applicable = submission.customerserviceselection_set.filter(
+                    surcharge_applicable=True
+                ).exists()
+                if not submission.quote_surcharge_applicable:
+                    submission.total_surcharges = Decimal("0.00")
+
+                submission.save()
+
+                # Recalculate totals after service removal.
+                submit_final_view = SubmitFinalQuoteView()
+                submit_final_view._calculate_final_totals_new(submission)
+
+            # Return updated submission payload for convenience.
+            refreshed = get_object_or_404(CustomerSubmission, id=submission_id)
+            return Response(
+                {
+                    "message": "Service removed successfully",
+                    "all_services_completed": all_services_completed,
+                    "submission": CustomerSubmissionDetailSerializer(refreshed, context={"request": request}).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 # Step 4: Get questions for a specific service
 class ServiceQuestionsView(APIView):
     """Get questions for a specific service"""
