@@ -34,7 +34,13 @@ from .serializers import (
 from service_app.serializers import GlobalSizePackageSerializer
 
 
-from quote_app.helpers import create_or_update_ghl_contact, add_quote_drafted_tag_to_ghl, upload_file_to_ghl_media, delete_file_from_ghl_media
+from quote_app.helpers import (
+    create_or_update_ghl_contact,
+    add_quote_drafted_tag_to_ghl,
+    sync_ghl_contact_tags_for_submission_status,
+    upload_file_to_ghl_media,
+    delete_file_from_ghl_media,
+)
 
 # Step 1: Get initial data (locations, services, size ranges)
 class InitialDataView(APIView):
@@ -154,6 +160,10 @@ class RemoveServiceFromSubmissionView(APIView):
                 # Recalculate totals after service removal.
                 submit_final_view = SubmitFinalQuoteView()
                 submit_final_view._calculate_final_totals_new(submission)
+
+            # Sync GHL contact tags to match new status (draft -> "quote drafted", submitted -> "quote_requested").
+            if not submission.is_on_the_go:
+                sync_ghl_contact_tags_for_submission_status(submission)
 
             # Return updated submission payload for convenience.
             refreshed = get_object_or_404(CustomerSubmission, id=submission_id)
@@ -2065,11 +2075,16 @@ class EditServiceResponsesView(APIView):
                         submission.status = 'draft'
                 
                 submission.save()
-                
-                # Update GHL contact if needed
+
+                # Sync GHL contact tags (and custom fields when submitted/approved) to match submission status
                 if not submission.is_on_the_go:
-                    create_or_update_ghl_contact(submission, is_submit=True)
-                
+                    if submission.status == "approved":
+                        create_or_update_ghl_contact(submission, is_submit=True)
+                    elif submission.status == "submitted":
+                        create_or_update_ghl_contact(submission, is_submit=False)
+                    else:
+                        sync_ghl_contact_tags_for_submission_status(submission)
+
                 # Get updated quote for response
                 new_package_quote = service_selection.package_quotes.filter(is_selected=True).first()
                 

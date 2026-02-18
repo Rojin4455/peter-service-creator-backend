@@ -3,6 +3,100 @@ from accounts.models import GHLAuthCredentials
 import requests
 from decouple import config
 
+# Quote status tags in GHL - only one of these should be on the contact at a time
+QUOTE_STATUS_TAGS = ("quote drafted", "quote_requested", "quote_accepted")
+
+
+def _get_ghl_contact_results(submission, credentials, headers, location_id):
+    """Fetch GHL contact by ghl_contact_id or search by email/phone. Returns list of contact dicts (or empty)."""
+    results = []
+    if submission.ghl_contact_id:
+        search_url = f"https://services.leadconnectorhq.com/contacts/{submission.ghl_contact_id}"
+        search_response = requests.get(search_url, headers=headers)
+        if search_response.status_code == 200:
+            search_data = search_response.json()
+            if "contact" in search_data and isinstance(search_data["contact"], dict):
+                results = [search_data["contact"]]
+    else:
+        if submission.customer_email:
+            search_url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&query={submission.customer_email}"
+            search_response = requests.get(search_url, headers=headers)
+            if search_response.status_code == 200:
+                search_data = search_response.json()
+                if "contacts" in search_data and isinstance(search_data["contacts"], list):
+                    results = search_data["contacts"]
+                elif "contact" in search_data and isinstance(search_data["contact"], dict):
+                    results = [search_data["contact"]]
+        if not results and submission.customer_phone:
+            search_url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&query={submission.customer_phone}"
+            search_response = requests.get(search_url, headers=headers)
+            if search_response.status_code == 200:
+                search_data = search_response.json()
+                if "contacts" in search_data and isinstance(search_data["contacts"], list):
+                    results = search_data["contacts"]
+                elif "contact" in search_data and isinstance(search_data["contact"], dict):
+                    results = [search_data["contact"]]
+    return results
+
+
+def sync_ghl_contact_tags_for_submission_status(submission):
+    """
+    Update GHL contact tags to match submission.status:
+    - draft -> "quote drafted" (remove quote_requested, quote_accepted)
+    - submitted -> "quote_requested" (remove quote drafted, quote_accepted)
+    - approved -> "quote_accepted" (remove quote drafted, quote_requested)
+    """
+    try:
+        credentials = GHLAuthCredentials.objects.first()
+        if not credentials:
+            return
+        token = credentials.access_token
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Version": "2021-07-28",
+            "Content-Type": "application/json",
+        }
+        location_id = credentials.location_id
+        results = _get_ghl_contact_results(submission, credentials, headers, location_id)
+        if not results:
+            return
+        contact = results[0]
+        ghl_contact_id = contact["id"]
+        existing_tags = contact.get("tags", [])
+        if isinstance(existing_tags, str):
+            existing_tags = [existing_tags]
+        # Remove all quote status tags so we only have one
+        tags_without_status = [t for t in existing_tags if t not in QUOTE_STATUS_TAGS]
+        status = (submission.status or "").lower()
+        if status == "draft":
+            new_status_tag = "quote drafted"
+        elif status == "submitted":
+            new_status_tag = "quote_requested"
+        elif status == "approved":
+            new_status_tag = "quote_accepted"
+        else:
+            # declined, expired, packages_selected etc. - don't add a status tag here
+            new_status_tag = None
+        if new_status_tag:
+            updated_tags = list(set(tags_without_status + [new_status_tag]))
+        else:
+            updated_tags = tags_without_status
+        contact_payload = {"tags": updated_tags}
+        resp = requests.put(
+            f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
+            json=contact_payload,
+            headers=headers,
+        )
+        if resp.status_code in (200, 201):
+            if not submission.ghl_contact_id:
+                submission.ghl_contact_id = ghl_contact_id
+                submission.save()
+            print(f"GHL tags synced to '{new_status_tag}' for contact {ghl_contact_id}")
+    except Exception as e:
+        print(f"Error syncing GHL contact tags for submission status: {e}")
+
+
 def add_quote_drafted_tag_to_ghl(submission):
     """Add 'quote drafted' tag to GHL contact when submission is created"""
     try:
@@ -262,15 +356,11 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             if isinstance(existing_tags, str):
                 existing_tags = [existing_tags]
 
-            # Remove "quote drafted" tag if it exists
-            existing_tags = [tag for tag in existing_tags if tag != "quote drafted"]
-
-            # Determine new tags based on status
+            # Remove all quote status tags so only one is set (quote_requested or quote_accepted)
+            existing_tags = [tag for tag in existing_tags if tag not in QUOTE_STATUS_TAGS]
             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
-
             if is_declined:
-                new_tags.append("quote_declined")  # keep naming consistent
-
+                new_tags.append("quote_declined")
             updated_tags = list(set(existing_tags + new_tags))
 
             contact_payload = {
@@ -289,7 +379,6 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         else:
             # No existing contact found, create new one
-            # Remove "quote drafted" if it exists (shouldn't happen for new contact, but just in case)
             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
             if is_declined:
                 new_tags.append("quote_declined")
@@ -327,9 +416,7 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                             if isinstance(existing_tags, str):
                                 existing_tags = [existing_tags]
                             
-                            # Remove "quote drafted" tag if it exists
-                            existing_tags = [tag for tag in existing_tags if tag != "quote drafted"]
-                            
+                            existing_tags = [tag for tag in existing_tags if tag not in QUOTE_STATUS_TAGS]
                             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
                             if is_declined:
                                 new_tags.append("quote_declined")
