@@ -5,6 +5,7 @@ from decouple import config
 
 # Quote status tags in GHL - only one of these should be on the contact at a time
 QUOTE_STATUS_TAGS = ("quote drafted", "quote_requested", "quote_accepted")
+BID_IN_PERSON_TAG = "bid in person"
 
 
 def _get_ghl_contact_results(submission, credentials, headers, location_id):
@@ -81,7 +82,9 @@ def sync_ghl_contact_tags_for_submission_status(submission):
         if new_status_tag:
             updated_tags = list(set(tags_without_status + [new_status_tag]))
         else:
-            updated_tags = tags_without_status
+            updated_tags = list(tags_without_status)
+        if getattr(submission, "is_bid_in_person", False):
+            updated_tags = list(set(updated_tags + [BID_IN_PERSON_TAG]))
         contact_payload = {"tags": updated_tags}
         resp = requests.put(
             f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
@@ -361,6 +364,8 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
             if is_declined:
                 new_tags.append("quote_declined")
+            if getattr(submission, "is_bid_in_person", False):
+                new_tags.append(BID_IN_PERSON_TAG)
             updated_tags = list(set(existing_tags + new_tags))
 
             contact_payload = {
@@ -382,7 +387,9 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
             if is_declined:
                 new_tags.append("quote_declined")
-            
+            if getattr(submission, "is_bid_in_person", False):
+                new_tags.append(BID_IN_PERSON_TAG)
+
             contact_payload = {
                 "firstName": submission.first_name,
                 "lastName": submission.last_name,
@@ -420,7 +427,9 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
                             new_tags = ["quote_requested" if not is_submit else "quote_accepted"]
                             if is_declined:
                                 new_tags.append("quote_declined")
-                            
+                            if getattr(submission, "is_bid_in_person", False):
+                                new_tags.append(BID_IN_PERSON_TAG)
+
                             updated_tags = list(set(existing_tags + new_tags))
                             
                             update_payload = {
