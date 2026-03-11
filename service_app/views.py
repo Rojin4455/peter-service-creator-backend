@@ -1633,7 +1633,11 @@ class PaginatedSubmissionsList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        queryset = CustomerSubmission.objects.filter(is_on_the_go=False).order_by('-created_at')
+        queryset = CustomerSubmission.objects.filter(is_on_the_go=False).select_related(
+            'location'
+        ).prefetch_related(
+            'customerserviceselection_set__service'
+        ).order_by('-created_at')
 
         # Optional filters
         status_param = request.query_params.get('status')

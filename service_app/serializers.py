@@ -988,13 +988,16 @@ class CustomerSubmissionListSerializer(serializers.ModelSerializer):
     customer_name = serializers.SerializerMethodField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     property_type_display = serializers.CharField(source='get_property_type_display', read_only=True)
+    city = serializers.SerializerMethodField()
+    selected_services = serializers.SerializerMethodField()
     
     class Meta:
         model = CustomerSubmission
         fields = [
             'id', 'customer_name', 'first_name', 'last_name', 
             'customer_email', 'customer_phone', 'company_name',
-            'status', 'status_display', 'property_type', 'property_type_display',
+            'city', 'postal_code', 'street_address',
+            'selected_services', 'status', 'status_display', 'property_type', 'property_type_display',
             'final_total', 'total_base_price', 'total_addons_price',
             'discounted_amount', 'is_coupon_applied',
             'created_at', 'updated_at', 'expires_at'
@@ -1003,3 +1006,14 @@ class CustomerSubmissionListSerializer(serializers.ModelSerializer):
     def get_customer_name(self, obj):
         full_name = f"{obj.first_name or ''} {obj.last_name or ''}".strip()
         return full_name if full_name else 'N/A'
+    
+    def get_city(self, obj):
+        """City from location name (Location.name typically holds city/area)"""
+        if obj.location:
+            return obj.location.name
+        return None
+    
+    def get_selected_services(self, obj):
+        """List of requested/selected service names"""
+        selections = obj.customerserviceselection_set.select_related('service').all()
+        return [sel.service.name for sel in selections]
