@@ -1511,7 +1511,7 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         submission_id = self.kwargs['id']
         return get_object_or_404(
-            CustomerSubmission.objects.prefetch_related(
+            CustomerSubmission.objects.select_related('location').prefetch_related(
                 'customerserviceselection_set__service',
                 'customerserviceselection_set__package_quotes__package',
                 'customerserviceselection_set__question_responses__question',

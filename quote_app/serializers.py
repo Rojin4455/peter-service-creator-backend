@@ -249,6 +249,8 @@ from service_app.serializers import GlobalSizePackageSerializer
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
+    city = serializers.SerializerMethodField()
+    selected_services = serializers.SerializerMethodField()
     service_selections = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
     # addons = AddOnServiceSerializer(many=True, read_only=True)
@@ -272,7 +274,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             
 
             # Address info
-            'street_address', 'location', 'location_details',
+            'street_address', 'location', 'location_details', 'city',
 
             # Discovery
             'heard_about_us',
@@ -312,6 +314,17 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'bid_notes_private',
             'bid_notes_public'
         ]
+
+    def get_city(self, obj):
+        """City from location name (Location.name typically holds city/area)"""
+        if obj.location:
+            return obj.location.name
+        return None
+
+    def get_selected_services(self, obj):
+        """List of requested/selected service names"""
+        selections = obj.customerserviceselection_set.select_related('service').all()
+        return [sel.service.name for sel in selections]
 
     def get_service_selections(self, obj):
         selections = obj.customerserviceselection_set.all().prefetch_related(
