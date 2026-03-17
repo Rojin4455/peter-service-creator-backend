@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
-from .client import search_clients, create_client, get_visits, create_job, get_client_properties
+from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
 
 
 class JobberSearchClientsView(APIView):
@@ -71,6 +71,68 @@ class JobberVisitsView(APIView):
         if err:
             return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
         return Response({"visits": nodes})
+
+
+class JobberCreatePropertyView(APIView):
+    """
+    POST – Create a property (service address) for an existing Jobber client.
+    Use when the client has no property so you can create a job for them.
+
+    Body (JSON):
+      - client_id (required): Jobber client encoded ID.
+      - street1 (required): Street address line 1.
+      - city (required): City.
+      - province (required): State / province / region.
+      - postal_code (required): Postal or ZIP code.
+      - street2 (optional): Street address line 2.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        client_id = (request.data.get("client_id") or "").strip()
+        street1 = (request.data.get("street1") or "").strip()
+        city = (request.data.get("city") or "").strip()
+        province = (request.data.get("province") or "").strip()
+        postal_code = (request.data.get("postal_code") or "").strip()
+        street2 = (request.data.get("street2") or "").strip() or None
+
+        if not client_id:
+            return Response(
+                {"error": "client_id is required (Jobber client encoded ID)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not street1:
+            return Response(
+                {"error": "street1 is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not city:
+            return Response(
+                {"error": "city is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not province:
+            return Response(
+                {"error": "province is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not postal_code:
+            return Response(
+                {"error": "postal_code is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        property_obj, err = create_property_for_client(
+            client_id=client_id,
+            street1=street1,
+            city=city,
+            province=province,
+            postal_code=postal_code,
+            street2=street2,
+        )
+        if err:
+            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({"property": property_obj}, status=status.HTTP_201_CREATED)
 
 
 class JobberCreateJobView(APIView):

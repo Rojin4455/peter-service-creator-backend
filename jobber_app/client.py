@@ -1,19 +1,21 @@
 """
 Jobber GraphQL API client.
 Uses stored JobberAuthCredentials from accounts app.
+Automatically refreshes the access token when it expires.
 """
 import json
 import logging
 import requests
-from django.conf import settings
+from decouple import config
 
 logger = logging.getLogger(__name__)
 
 JOBBER_GRAPHQL_URL = "https://api.getjobber.com/api/graphql"
+JOBBER_TOKEN_URL = "https://api.getjobber.com/api/oauth/token"
 
 
 def get_access_token():
-    """Get current Jobber access token from DB. Caller should handle refresh if 401."""
+    """Get current Jobber access token from DB."""
     from accounts.models import JobberAuthCredentials
     creds = JobberAuthCredentials.objects.first()
     if not creds:
@@ -21,8 +23,68 @@ def get_access_token():
     return creds.access_token
 
 
-def _request(query, variables=None):
-    """POST a GraphQL request to Jobber. Returns (data dict, error message or None)."""
+def _refresh_jobber_tokens():
+    """
+    Exchange refresh_token for new access_token (and possibly new refresh_token).
+    Updates JobberAuthCredentials in DB. Returns (new_access_token, None) or (None, error_message).
+    """
+    from accounts.models import JobberAuthCredentials
+    creds = JobberAuthCredentials.objects.first()
+    if not creds or not creds.refresh_token:
+        return None, "No refresh token. Reconnect Jobber at /api/accounts/jobber/connect/"
+    try:
+        client_id = config("JOBBER_CLIENT_ID")
+        client_secret = config("JOBBER_CLIENT_SECRET")
+    except Exception as e:
+        return None, f"Jobber env not configured: {e}"
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": creds.refresh_token,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    resp = requests.post(JOBBER_TOKEN_URL, data=data, timeout=30)
+    try:
+        response_data = resp.json()
+    except requests.exceptions.JSONDecodeError:
+        response_data = {}
+    if resp.status_code != 200:
+        err = (
+            response_data.get("error_description")
+            or response_data.get("error")
+            or resp.text[:300].strip()
+        ) or "Unknown error"
+        logger.warning("Jobber token refresh failed: %s", err)
+        msg = f"Token refresh failed: {err}"
+        if "refresh token" in err.lower() and ("not valid" in err.lower() or "invalid" in err.lower() or "expired" in err.lower()):
+            msg += " Reconnect Jobber at /api/accounts/jobber/connect/"
+        return None, msg
+    access_token = response_data.get("access_token")
+    refresh_token = response_data.get("refresh_token") or creds.refresh_token
+    if not access_token:
+        return None, "Missing access_token in refresh response"
+    creds.access_token = access_token
+    creds.refresh_token = refresh_token
+    creds.save(update_fields=["access_token", "refresh_token", "updated_at"])
+    logger.info("Jobber access token refreshed successfully")
+    return access_token, None
+
+
+def _is_token_expired_error(status_code, data):
+    """Return True if the response indicates an expired or invalid token."""
+    if status_code == 401:
+        return True
+    if status_code == 200 and data:
+        errors = data.get("errors") or []
+        for e in errors:
+            msg = (e.get("message") or "").lower()
+            if "token" in msg or "expired" in msg or "unauthorized" in msg or "authenticate" in msg:
+                return True
+    return False
+
+
+def _request(query, variables=None, _retried=False):
+    """POST a GraphQL request to Jobber. Returns (data dict, error message or None). Auto-refreshes token on expiry."""
     token = get_access_token()
     if not token:
         return None, "Jobber not connected. Complete OAuth at /api/accounts/jobber/connect/"
@@ -35,9 +97,17 @@ def _request(query, variables=None):
         "X-JOBBER-GRAPHQL-VERSION": "2025-04-16",
     }
     resp = requests.post(JOBBER_GRAPHQL_URL, json=payload, headers=headers, timeout=30)
+    try:
+        data = resp.json() if resp.content else {}
+    except requests.exceptions.JSONDecodeError:
+        data = {}
+    if _is_token_expired_error(resp.status_code, data) and not _retried:
+        new_token, err = _refresh_jobber_tokens()
+        if err:
+            return None, err
+        return _request(query, variables, _retried=True)
     if resp.status_code != 200:
         return None, f"Jobber API HTTP {resp.status_code}: {resp.text[:500]}"
-    data = resp.json()
     if "errors" in data and data["errors"]:
         err_msg = "; ".join(e.get("message", str(e)) for e in data["errors"])
         return None, err_msg
@@ -217,6 +287,69 @@ def get_client_properties(client_id):
         print("[Jobber] clientProperties empty for client_id=%s. Full GraphQL data: %s" % (client_id, json.dumps(data, default=str)))
         logger.info("Jobber clientProperties empty (client_id=%s). Raw client: %s", client_id, client)
     return prop_id, nodes, None
+
+
+# -----------------------------------------------------------------------------
+# Create property for a client (service address)
+# -----------------------------------------------------------------------------
+# propertyCreate(clientId!, input: PropertyCreateInput!) with properties[].address.
+
+MUTATION_PROPERTY_CREATE = """
+mutation PropertyCreate($clientId: EncodedId!, $input: PropertyCreateInput!) {
+  propertyCreate(clientId: $clientId, input: $input) {
+    properties {
+      id
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def create_property_for_client(client_id, street1, city, province, postal_code, street2=None):
+    """
+    Create a property (service address) for an existing Jobber client.
+
+    Args:
+        client_id: Jobber client encoded ID.
+        street1: Street address line 1.
+        city: City.
+        province: State / province / region.
+        postal_code: Postal or ZIP code.
+        street2: Optional street line 2.
+
+    Returns:
+        (first created property dict with id, or None, error_message).
+    """
+    address = {
+        "street1": (street1 or "").strip(),
+        "city": (city or "").strip(),
+        "province": (province or "").strip(),
+        "postalCode": (postal_code or "").strip(),
+    }
+    if street2:
+        address["street2"] = (street2 or "").strip()
+    input_obj = {
+        "properties": [
+            {"address": address}
+        ]
+    }
+    data, err = _request(MUTATION_PROPERTY_CREATE, {"clientId": client_id, "input": input_obj})
+    if err:
+        return None, err
+    result = data.get("propertyCreate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return None, msg
+    properties = result.get("properties") or []
+    if not properties:
+        return None, "No property returned from Jobber"
+    prop = properties[0]
+    return prop, None
 
 
 # -----------------------------------------------------------------------------
