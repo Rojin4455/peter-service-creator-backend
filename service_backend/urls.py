@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/accounts/', include("accounts.urls")),
     path('api/user/', include("user_app.urls")),
     path('api/quote/', include("quote_app.urls")),
+    path('api/jobber/', include("jobber_app.urls")),
 ]
 
 if settings.DEBUG:  # Only serve media in dev

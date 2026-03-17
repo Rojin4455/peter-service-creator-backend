@@ -40,6 +40,24 @@ class Contact(models.Model):
         return f"{self.first_name} {self.last_name} ({self.email})"
     
 
+class JobberAuthCredentials(models.Model):
+    """Single record per environment: one Jobber account connection."""
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    # Optional: from Jobber account query for tracking
+    account_id = models.CharField(max_length=255, null=True, blank=True)
+    account_name = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "jobber_auth_credentials"
+        verbose_name_plural = "Jobber auth credentials"
+
+    def __str__(self):
+        return f"Jobber ({self.account_name or self.account_id or 'connected'})"
+
+
 class Webhook(models.Model):
     event = models.CharField(max_length=100)
     company_id = models.CharField(max_length=100)

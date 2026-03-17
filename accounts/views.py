@@ -3,7 +3,8 @@ import requests
 from django.http import JsonResponse
 import json
 from django.shortcuts import redirect
-from accounts.models import GHLAuthCredentials,Webhook
+from django.utils import timezone
+from accounts.models import GHLAuthCredentials, Webhook, JobberAuthCredentials
 from django.views.decorators.csrf import csrf_exempt
 import logging
 from django.views import View
@@ -90,3 +91,84 @@ def tokens(request):
             "status_code": response.status_code,
             "response_text": response.text[:500]
         }, status=500)
+
+
+# =============================================================================
+# Jobber OAuth 2.0 (authorization code flow)
+# =============================================================================
+
+JOBBER_AUTHORIZE_URL = "https://api.getjobber.com/api/oauth/authorize"
+JOBBER_TOKEN_URL = "https://api.getjobber.com/api/oauth/token"
+
+
+def jobber_connect(request):
+    """Redirect user to Jobber to authorize the app."""
+    try:
+        client_id = config("JOBBER_CLIENT_ID")
+        redirect_uri = config("JOBBER_REDIRECT_URI")
+    except Exception:
+        return JsonResponse({"error": "JOBBER_CLIENT_ID and JOBBER_REDIRECT_URI must be set in env"}, status=500)
+    state = request.GET.get("state", "")
+    auth_url = (
+        f"{JOBBER_AUTHORIZE_URL}?"
+        f"response_type=code&client_id={client_id}&redirect_uri={redirect_uri}"
+    )
+    if state:
+        auth_url += f"&state={state}"
+    return redirect(auth_url)
+
+
+def jobber_callback(request):
+    """Exchange authorization code for tokens and store credentials."""
+    code = request.GET.get("code")
+    if not code:
+        return JsonResponse({"error": "Authorization code not received from Jobber"}, status=400)
+    try:
+        client_id = config("JOBBER_CLIENT_ID")
+        client_secret = config("JOBBER_CLIENT_SECRET")
+        redirect_uri = config("JOBBER_REDIRECT_URI")
+    except Exception as e:
+        return JsonResponse({"error": f"Jobber env not configured: {e}"}, status=500)
+
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+    response = requests.post(JOBBER_TOKEN_URL, data=data)
+    try:
+        response_data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        return JsonResponse({
+            "error": "Invalid JSON from Jobber token endpoint",
+            "status_code": response.status_code,
+            "response_text": response.text[:500],
+        }, status=500)
+
+    if response.status_code != 200:
+        return JsonResponse({
+            "error": response_data.get("error", "Token exchange failed"),
+            "details": response_data,
+        }, status=response.status_code)
+
+    access_token = response_data.get("access_token")
+    refresh_token = response_data.get("refresh_token")
+    if not access_token or not refresh_token:
+        return JsonResponse({"error": "Missing access_token or refresh_token in response"}, status=500)
+
+    creds = JobberAuthCredentials.objects.first()
+    if creds:
+        creds.access_token = access_token
+        creds.refresh_token = refresh_token
+        creds.save(update_fields=["access_token", "refresh_token", "updated_at"])
+    else:
+        JobberAuthCredentials.objects.create(
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+    return JsonResponse({
+        "message": "Jobber connected successfully",
+        "token_stored": True,
+    })
