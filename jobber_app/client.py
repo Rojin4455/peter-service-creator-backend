@@ -2,8 +2,12 @@
 Jobber GraphQL API client.
 Uses stored JobberAuthCredentials from accounts app.
 """
+import json
+import logging
 import requests
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 JOBBER_GRAPHQL_URL = "https://api.getjobber.com/api/graphql"
 
@@ -121,7 +125,7 @@ def create_client(first_name, last_name, email=None, phone=None):
     result = data.get("clientCreate") or {}
     user_errors = result.get("userErrors") or []
     if user_errors:
-        msg = "; ".join(e.get("message", str(e)) for e in user_errors)
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
         return None, msg
     client = result.get("client")
     return client, None
@@ -163,3 +167,159 @@ def get_visits(after_iso, before_iso):
     visits = data.get("visits") or {}
     nodes = visits.get("nodes") or []
     return nodes, None
+
+
+# -----------------------------------------------------------------------------
+# Get client's properties (need propertyId for job creation)
+# -----------------------------------------------------------------------------
+# Client has clientProperties(after, before, first, last): PropertyConnection!
+# PropertyConnection has both nodes and edges; request nodes for simpler parsing.
+
+QUERY_CLIENT_PROPERTIES = """
+query ClientProperties($id: EncodedId!) {
+  client(id: $id) {
+    id
+    clientProperties(first: 10) {
+      nodes {
+        id
+      }
+      edges {
+        node {
+          id
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def get_client_properties(client_id):
+    """
+    Get a client's properties. Returns (first property id, list of property dicts, error).
+    """
+    data, err = _request(QUERY_CLIENT_PROPERTIES, {"id": client_id})
+    if err:
+        return None, [], err
+    client = data.get("client")
+    if not client:
+        return None, [], "Client not found"
+    conn = client.get("clientProperties") or {}
+    # PropertyConnection may expose nodes[] or edges[].node; accept both
+    nodes = conn.get("nodes")
+    if not nodes:
+        edges = conn.get("edges") or []
+        nodes = [e.get("node") for e in edges if e.get("node")]
+    nodes = [n for n in nodes if n and n.get("id")]
+    prop_id = nodes[0].get("id") if nodes else None
+    if not prop_id:
+        # Always print so it shows in runserver console (logging may be disabled)
+        print("[Jobber] clientProperties empty for client_id=%s. Full GraphQL data: %s" % (client_id, json.dumps(data, default=str)))
+        logger.info("Jobber clientProperties empty (client_id=%s). Raw client: %s", client_id, client)
+    return prop_id, nodes, None
+
+
+# -----------------------------------------------------------------------------
+# Create job (one-off job: propertyId, invoicing, title, lineItems, etc.)
+# -----------------------------------------------------------------------------
+# JobCreateAttributes: propertyId!, invoicing!, title, instructions, lineItems,
+# timeframe, scheduling, notes, etc. No clientId or nested "attributes".
+
+MUTATION_JOB_CREATE = """
+mutation JobCreate($input: JobCreateAttributes!) {
+  jobCreate(input: $input) {
+    job {
+      id
+      jobNumber
+      title
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def create_job(
+    property_id,
+    title,
+    line_item_name,
+    line_item_description,
+    line_item_price,
+    job_notes=None,
+    scheduled_start_iso=None,
+    invoicing=None,
+):
+    """
+    Create a one-off job in Jobber.
+
+    Args:
+        property_id: Jobber property encoded ID (from get_client_properties(client_id)).
+        title: Job title (e.g. "Residential First Clean", "Move-In Cleaning").
+        line_item_name: Package/service name (e.g. "Basic Package").
+        line_item_description: Full package details / cleaning inclusions.
+        line_item_price: Approved quote total (decimal/float).
+        job_notes: Optional job instructions/notes.
+        scheduled_start_iso: Optional ISO 8601 datetime for the visit.
+        invoicing: Required by Jobber. Defaults to fixed one-time. Pass dict from GraphiQL
+                  JobInvoicingAttributes if needed (e.g. billingType, invoiceSchedule).
+
+    Returns:
+        (job dict or None, error_message).
+    """
+    try:
+        price_float = float(line_item_price)
+    except (TypeError, ValueError):
+        return None, "line_item_price must be a number"
+
+    if not property_id:
+        return None, "property_id is required (get it from get_client_properties(client_id))"
+
+    # Jobber: invoicingType = BillingStrategy (FIXED_PRICE | VISIT_BASED),
+    #         invoicingSchedule = BillingFrequencyEnum (ON_COMPLETION | PERIODIC | PER_VISIT | NEVER).
+    if invoicing is None:
+        invoicing = {
+            "invoicingType": "FIXED_PRICE",
+            "invoicingSchedule": "ON_COMPLETION",
+        }
+    # Ensure required invoicing fields exist (allow caller to override)
+    invoicing = dict(invoicing)
+    if invoicing.get("invoicingType") is None:
+        invoicing["invoicingType"] = "FIXED_PRICE"
+    if invoicing.get("invoicingSchedule") is None:
+        invoicing["invoicingSchedule"] = "ON_COMPLETION"
+
+    # Line items use 'name' (not 'title') and require saveToProductsAndServices.
+    input_obj = {
+        "propertyId": property_id,
+        "invoicing": invoicing,
+        "title": title or "Cleaning Job",
+        "lineItems": [
+            {
+                "name": line_item_name or "Service",
+                "description": line_item_description or "",
+                "unitPrice": round(price_float, 2),
+                "quantity": 1,
+                "category": "SERVICE",
+                "saveToProductsAndServices": False,
+            }
+        ],
+    }
+    if job_notes:
+        input_obj["instructions"] = job_notes
+    if scheduled_start_iso:
+        # TimeframeAttributes: often startAt + duration, or startDate. Try common shape.
+        input_obj["timeframe"] = {"startAt": scheduled_start_iso}
+
+    data, err = _request(MUTATION_JOB_CREATE, {"input": input_obj})
+    if err:
+        return None, err
+    result = data.get("jobCreate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return None, msg
+    job = result.get("job")
+    return job, None
