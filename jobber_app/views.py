@@ -207,3 +207,175 @@ class JobberCreateJobView(APIView):
         if err:
             return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
         return Response({"job": job}, status=status.HTTP_201_CREATED)
+
+
+def _build_booking_job_notes(data):
+    """Build job notes string from booking job details (per integration doc)."""
+    parts = []
+    if data.get("bedrooms") is not None:
+        parts.append(f"Bedrooms: {data.get('bedrooms')}")
+    if data.get("bathrooms") is not None:
+        parts.append(f"Bathrooms: {data.get('bathrooms')}")
+    if data.get("square_footage"):
+        parts.append(f"Square footage: {data.get('square_footage')}")
+    if data.get("condition"):
+        parts.append(f"Condition: {data.get('condition')}")
+    if data.get("pets"):
+        parts.append(f"Pets: {data.get('pets')}")
+    if data.get("add_ons"):
+        parts.append(f"Add-ons: {data.get('add_ons')}")
+    if data.get("special_instructions"):
+        parts.append(f"Special requests: {data.get('special_instructions')}")
+    if data.get("entry_instructions"):
+        parts.append(f"Entry instructions: {data.get('entry_instructions')}")
+    if data.get("estimated_labor_hours") is not None:
+        parts.append(f"Estimated labor hours: {data.get('estimated_labor_hours')}")
+    return "\n".join(parts) if parts else None
+
+
+def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
+    """Return ISO 8601 datetime for job start. Prefer scheduled_start_iso; else combine date + time."""
+    if scheduled_start_iso and str(scheduled_start_iso).strip():
+        return str(scheduled_start_iso).strip()
+    date_str = (selected_date or "").strip()
+    time_str = (selected_time or "").strip()
+    if not date_str or not time_str:
+        return None
+    # Allow "2026-04-20" + "14:00" or "14:00:00"
+    if "T" in date_str:
+        return date_str
+    if len(time_str) <= 5 and ":" in time_str:
+        time_str = time_str + ":00"  # 14:00 -> 14:00:00
+    return f"{date_str}T{time_str}"
+
+
+class BookingConfirmView(APIView):
+    """
+    POST /api/jobber/booking/confirm/
+    Unified booking confirmation: find or create client → resolve or create property → create job in Jobber.
+
+    Request body (from Pricing Calculator):
+      Client: first_name, last_name, email, phone (at least one of email/phone).
+      Address: street1 (or service_address), city, province, postal_code; optional street2.
+      Service: service_type (job title), package_title, package_description, approved_price; optional add_ons.
+      Job details: bedrooms, bathrooms, square_footage, condition, pets, special_instructions, entry_instructions; optional estimated_labor_hours.
+      Booking: scheduled_start_iso (ISO 8601) OR selected_date + selected_time.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        data = request.data
+        # Client
+        first_name = (data.get("first_name") or "").strip()
+        last_name = (data.get("last_name") or "").strip()
+        email = (data.get("email") or "").strip() or None
+        phone = data.get("phone")
+        if phone is not None:
+            phone = str(phone).strip() or None
+        # Address (for property create when needed)
+        street1 = (data.get("street1") or data.get("service_address") or "").strip()
+        city = (data.get("city") or "").strip()
+        province = (data.get("province") or data.get("state") or "").strip()
+        postal_code = (data.get("postal_code") or data.get("zip_code") or "").strip()
+        street2 = (data.get("street2") or "").strip() or None
+        # Service
+        service_type = (data.get("service_type") or data.get("title") or "").strip()
+        package_title = (data.get("package_title") or data.get("line_item_name") or "").strip()
+        package_description = (data.get("package_description") or data.get("line_item_description") or "").strip()
+        approved_price = data.get("approved_price") if data.get("approved_price") is not None else data.get("line_item_price")
+        add_ons = (data.get("add_ons") or "").strip() or None
+        # Booking time
+        scheduled_start_iso = _parse_booking_datetime(
+            data.get("selected_date"),
+            data.get("selected_time"),
+            data.get("scheduled_start_iso"),
+        )
+        # Validation
+        if not first_name or not last_name:
+            return Response(
+                {"error": "first_name and last_name are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not email and not phone:
+            return Response(
+                {"error": "At least one of email or phone is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not service_type:
+            return Response(
+                {"error": "service_type (job title) is required (e.g. Residential First Clean)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not package_title:
+            return Response(
+                {"error": "package_title is required (e.g. Basic Package)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if approved_price is None:
+            return Response(
+                {"error": "approved_price is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 1) Find or create client
+        search_term = email or phone
+        nodes, _, err = search_clients(search_term, first=5)
+        if err:
+            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        client_id = None
+        client_created = False
+        if nodes:
+            # Use first match (by email or phone)
+            client_id = nodes[0].get("id")
+        if not client_id:
+            client, err = create_client(first_name, last_name, email=email, phone=phone)
+            if err:
+                return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+            client_id = client.get("id")
+            client_created = True
+
+        # 2) Resolve or create property (need address for create)
+        prop_id, _, err = get_client_properties(client_id)
+        if err:
+            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        if not prop_id:
+            if not street1 or not city or not province or not postal_code:
+                return Response(
+                    {"error": "Client has no property. Provide street1, city, province, postal_code to create one."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            prop, err = create_property_for_client(
+                client_id=client_id,
+                street1=street1,
+                city=city,
+                province=province,
+                postal_code=postal_code,
+                street2=street2,
+            )
+            if err:
+                return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+            prop_id = prop.get("id")
+
+        # 3) Build job notes and create job
+        job_notes = _build_booking_job_notes(data)
+        job, err = create_job(
+            property_id=prop_id,
+            title=service_type,
+            line_item_name=package_title,
+            line_item_description=package_description,
+            line_item_price=approved_price,
+            job_notes=job_notes,
+            scheduled_start_iso=scheduled_start_iso,
+        )
+        if err:
+            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response(
+            {
+                "client_id": client_id,
+                "client_created": client_created,
+                "property_id": prop_id,
+                "job": job,
+            },
+            status=status.HTTP_201_CREATED,
+        )

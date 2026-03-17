@@ -440,8 +440,10 @@ def create_job(
             }
         ],
     }
+    # instructions = schedule instructions; notes = array of JobCreateNoteInput (Internal notes / Note details).
     if job_notes:
         input_obj["instructions"] = job_notes
+        input_obj["notes"] = [{"message": job_notes}]
     if scheduled_start_iso:
         # TimeframeAttributes: often startAt + duration, or startDate. Try common shape.
         input_obj["timeframe"] = {"startAt": scheduled_start_iso}
