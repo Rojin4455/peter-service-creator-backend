@@ -7,5 +7,6 @@ urlpatterns = [
     path("properties/create/", views.JobberCreatePropertyView.as_view(), name="jobber-create-property"),
     path("visits/", views.JobberVisitsView.as_view(), name="jobber-visits"),
     path("jobs/create/", views.JobberCreateJobView.as_view(), name="jobber-create-job"),
+    path("booking/slot-info/", views.BookingSlotInfoView.as_view(), name="booking-slot-info"),
     path("booking/confirm/", views.BookingConfirmView.as_view(), name="booking-confirm"),
 ]

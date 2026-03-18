@@ -233,6 +233,37 @@ def _build_booking_job_notes(data):
     return "\n".join(parts) if parts else None
 
 
+def _compute_labor_and_slot(price, service_type="", team_size=2):
+    """
+    Compute labor hours (low/high) and calendar slot duration per integration doc.
+    Residential First Clean: low = price/65, high = price/55.
+    Move-In / Move-Out: low = price/75, high = price/65.
+    Slot duration = labor_high / team_size, rounded to nearest 0.5 hour.
+    Returns (labor_hours_low, labor_hours_high, slot_duration_hours).
+    """
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None, None, None
+    if p <= 0:
+        return None, None, None
+    st = (service_type or "").strip().lower()
+    if "move" in st or "move-in" in st or "move-out" in st:
+        low = p / 75.0
+        high = p / 65.0
+    else:
+        low = p / 65.0
+        high = p / 55.0
+    try:
+        ts = max(1, min(10, int(team_size)))
+    except (TypeError, ValueError):
+        ts = 2
+    slot = high / ts
+    slot_rounded = round(slot * 2) / 2.0
+    slot_rounded = max(0.5, slot_rounded)
+    return round(low, 2), round(high, 2), round(slot_rounded, 2)
+
+
 def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
     """Return ISO 8601 datetime for job start. Prefer scheduled_start_iso; else combine date + time."""
     if scheduled_start_iso and str(scheduled_start_iso).strip():
@@ -247,6 +278,54 @@ def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
     if len(time_str) <= 5 and ":" in time_str:
         time_str = time_str + ":00"  # 14:00 -> 14:00:00
     return f"{date_str}T{time_str}"
+
+
+class BookingSlotInfoView(APIView):
+    """
+    GET /api/jobber/booking/slot-info/?price=525&service_type=Residential First Clean&team_size=2
+    Returns labor hours (low/high) and calendar slot duration for the given price and service type.
+    Formulas: Residential First Clean -> price/65, price/55; Move-In/Out -> price/75, price/65.
+    Slot duration = labor_high ÷ team_size, rounded to nearest 0.5 hour.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        price = request.query_params.get("price")
+        service_type = (request.query_params.get("service_type") or "").strip()
+        team_size = request.query_params.get("team_size", "2")
+        if price is None:
+            return Response(
+                {"error": "Query param 'price' is required (approved quote total)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "price must be a number"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if p <= 0:
+            return Response(
+                {"error": "price must be greater than 0"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        labor_low, labor_high, slot_duration = _compute_labor_and_slot(
+            price=p, service_type=service_type or None, team_size=team_size
+        )
+        if labor_low is None:
+            return Response(
+                {"error": "Could not compute labor and slot"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({
+            "labor_hours_low": labor_low,
+            "labor_hours_high": labor_high,
+            "slot_duration_hours": slot_duration,
+            "price": p,
+            "service_type": service_type or None,
+            "team_size": max(1, min(10, int(team_size) if str(team_size).strip().isdigit() else 2)),
+        })
 
 
 class BookingConfirmView(APIView):
