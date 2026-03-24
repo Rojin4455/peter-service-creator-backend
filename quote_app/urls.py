@@ -72,6 +72,11 @@ urlpatterns = [
         views.DeclineSubmissionView.as_view(),
         name="decline-submission",
     ),
+    path(
+        "submissions/<uuid:submission_id>/bid-in-person/",
+        views.UpdateSubmissionBidInPersonView.as_view(),
+        name="update-submission-bid-in-person",
+    ),
 
 
 

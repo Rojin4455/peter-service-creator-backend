@@ -2882,6 +2882,49 @@ class DeclineSubmissionView(APIView):
         )
 
 
+class UpdateSubmissionBidInPersonView(APIView):
+    """Admin endpoint to directly set submission.is_bid_in_person."""
+    permission_classes = [IsAdminPermission]
+
+    def patch(self, request, submission_id):
+        """
+        Request body:
+        {
+            "is_bid_in_person": true
+        }
+        """
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        if "is_bid_in_person" not in request.data:
+            return Response(
+                {"error": "is_bid_in_person is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        value = request.data.get("is_bid_in_person")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "is_bid_in_person must be true or false"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        submission.is_bid_in_person = value
+        submission.last_edited_at = timezone.now()
+        submission.edited_by = (
+            request.data.get("edited_by")
+            or (request.user.username if hasattr(request.user, "username") else "admin")
+        )
+        submission.save(update_fields=["is_bid_in_person", "last_edited_at", "edited_by", "updated_at"])
+
+        return Response(
+            {
+                "message": "is_bid_in_person updated successfully",
+                "submission_id": str(submission.id),
+                "is_bid_in_person": submission.is_bid_in_person,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class UpdatePackagePriceView(APIView):
     """Admin endpoint to override price for a specific package quote"""
     permission_classes = [IsAdminPermission]
