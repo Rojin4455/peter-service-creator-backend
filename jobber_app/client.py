@@ -185,7 +185,14 @@ def create_client(first_name, last_name, email=None, phone=None):
     else:
         input_obj["emails"] = []
     if phone:
-        input_obj["phones"] = [{"number": str(phone), "primary": True, "description": "MAIN"}]
+        input_obj["phones"] = [
+            {
+                "number": str(phone),
+                "primary": True,
+                "description": "MAIN",
+                "smsAllowed": True,
+            }
+        ]
     else:
         input_obj["phones"] = []
 
