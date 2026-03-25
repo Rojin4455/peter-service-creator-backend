@@ -1,12 +1,17 @@
 """
 Basic test endpoints for Jobber integration.
 """
+from datetime import timedelta
+
+from decouple import config
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
+from .sync_ghl_calendar import sync_jobber_visits_to_ghl_blocks
 
 
 class JobberSearchClientsView(APIView):
@@ -458,3 +463,50 @@ class BookingConfirmView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+def _can_run_ghl_calendar_sync(request):
+    """Allow sync if X-GHL-Calendar-Sync-Secret matches env, or authenticated admin user."""
+    expected = config("GHL_CALENDAR_SYNC_SECRET", default="").strip()
+    if expected:
+        got = (request.headers.get("X-GHL-Calendar-Sync-Secret") or "").strip()
+        if got == expected:
+            return True
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated and getattr(user, "is_admin", False):
+        return True
+    return False
+
+
+class GhlCalendarSyncFromJobberView(APIView):
+    """
+    POST — Pull Jobber visits for a time window and upsert GoHighLevel calendar **block slots**
+    so the embedded booking calendar reflects Jobber busy times.
+
+    Auth: set GHL_CALENDAR_SYNC_SECRET in env and send header X-GHL-Calendar-Sync-Secret,
+    **or** call as an authenticated admin (is_admin).
+
+    Body/query (optional):
+      - after: ISO 8601 start of range (default: now UTC)
+      - before: ISO 8601 end of range (default: now + 30 days UTC)
+
+    Requires env: GHL_LOCATION_ID, GHL_BOOKING_CALENDAR_ID (and GHL OAuth credentials in DB).
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_calendar_sync(request):
+            return Response(
+                {"error": "Forbidden. Provide X-GHL-Calendar-Sync-Secret or authenticate as admin."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        after = (request.data.get("after") or request.query_params.get("after") or "").strip()
+        before = (request.data.get("before") or request.query_params.get("before") or "").strip()
+        if not after:
+            after = timezone.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not before:
+            before = (timezone.now() + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        result = sync_jobber_visits_to_ghl_blocks(after, before)
+        return Response(result, status=status.HTTP_200_OK)
