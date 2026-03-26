@@ -14,6 +14,7 @@ from rest_framework.permissions import AllowAny
 
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
 from .sync_ghl_calendar import (
+    delete_jobber_visit_from_ghl_blocks,
     sync_jobber_job_to_ghl_blocks,
     sync_jobber_visit_to_ghl_blocks,
     sync_jobber_visits_to_ghl_blocks,
@@ -571,6 +572,7 @@ class JobberWebhookView(APIView):
     POST — Receive Jobber webhook events.
     Core behavior:
       - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots
+      - VISIT_DESTROY: delete mapped GHL block slot
       - JOB_CREATE: sync that job's visits to GHL block slots (fallback)
     """
     permission_classes = [AllowAny]
@@ -611,7 +613,7 @@ class JobberWebhookView(APIView):
             )
         )
 
-        if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "JOB_CREATE"):
+        if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "VISIT_DESTROY", "JOB_CREATE"):
             logger.warning("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
             print("[Jobber webhook] ignored topic=%s payload=%s" % (topic, payload))
             return Response(
@@ -624,6 +626,8 @@ class JobberWebhookView(APIView):
 
         if topic in ("VISIT_CREATE", "VISIT_UPDATE"):
             result = sync_jobber_visit_to_ghl_blocks(str(item_id))
+        elif topic == "VISIT_DESTROY":
+            result = delete_jobber_visit_from_ghl_blocks(str(item_id))
         else:
             result = sync_jobber_job_to_ghl_blocks(str(item_id))
         logger.warning("Jobber webhook sync result: topic=%s item_id=%s result=%s", topic, item_id, result)

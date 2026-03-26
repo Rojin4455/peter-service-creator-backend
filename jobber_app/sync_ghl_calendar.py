@@ -217,3 +217,24 @@ def sync_jobber_visit_to_ghl_blocks(visit_id):
     stats = _base_stats()
     _upsert_visits_to_ghl_blocks([visit], stats, location_id, calendar_id)
     return stats
+
+
+def delete_jobber_visit_from_ghl_blocks(visit_id):
+    """
+    Delete one Jobber visit mapping from GHL block slots.
+    Intended for VISIT_DESTROY webhook handling.
+    """
+    stats = _base_stats()
+    row = JobberVisitGhlBlockMap.objects.filter(jobber_visit_id=str(visit_id)).first()
+    if not row:
+        stats["skipped"] = 1
+        return stats
+
+    _, err = delete_calendar_event(row.ghl_event_id)
+    if err:
+        stats["errors"].append(f"delete {visit_id}: {err}")
+        return stats
+
+    row.delete()
+    stats["deleted"] = 1
+    return stats
