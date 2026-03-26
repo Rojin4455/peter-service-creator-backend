@@ -7,7 +7,7 @@ import logging
 
 from decouple import config
 
-from .client import get_visits
+from .client import get_job_visits, get_visits
 from .ghl_calendar_client import (
     create_block_slot,
     delete_calendar_event,
@@ -36,44 +36,12 @@ def _extract_ghl_event_id(data):
     return None
 
 
-def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
-    """
-    Fetch Jobber visits in [after_iso, before_iso], upsert GHL block slots, remove stale blocks.
-
-    Returns dict: { created, updated, deleted, skipped, errors: [...] }
-    """
-    location_id = config("GHL_LOCATION_ID", default=None)
-    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
-    if not location_id or not calendar_id:
-        return {
-            "created": 0,
-            "updated": 0,
-            "deleted": 0,
-            "skipped": 0,
-            "errors": [
-                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
-                "(sub-account location ID and the calendar ID that powers the booking widget)."
-            ],
-        }
-
-    visits, err = get_visits(after_iso, before_iso)
-    if err:
-        return {
-            "created": 0,
-            "updated": 0,
-            "deleted": 0,
-            "skipped": 0,
-            "errors": [err],
-        }
-
-    stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
-    seen_jobber_ids = set()
-
+def _upsert_visits_to_ghl_blocks(visits, stats, location_id, calendar_id):
+    """Upsert a list of Jobber visits into GHL block slots."""
     for v in visits:
         vid = v.get("id")
         if not vid:
             continue
-        seen_jobber_ids.add(str(vid))
         title = (v.get("title") or "").strip()
         block_title = f"{DEFAULT_TITLE_PREFIX}: {title}" if title else DEFAULT_TITLE_PREFIX
         start_raw = v.get("startAt")
@@ -83,7 +51,6 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
         if not start_dt or not end_dt:
             stats["skipped"] += 1
             continue
-        # GHL expects ISO strings; use Z format
         start_iso = start_dt.isoformat().replace("+00:00", "Z")
         end_iso = end_dt.isoformat().replace("+00:00", "Z")
 
@@ -95,7 +62,7 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
             if same_time:
                 stats["skipped"] += 1
                 continue
-            upd, uerr = update_block_slot(
+            _, uerr = update_block_slot(
                 existing.ghl_event_id,
                 location_id,
                 calendar_id,
@@ -135,6 +102,46 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
             )
             stats["created"] += 1
 
+
+def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
+    """
+    Fetch Jobber visits in [after_iso, before_iso], upsert GHL block slots, remove stale blocks.
+
+    Returns dict: { created, updated, deleted, skipped, errors: [...] }
+    """
+    location_id = config("GHL_LOCATION_ID", default=None)
+    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
+    if not location_id or not calendar_id:
+        return {
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "skipped": 0,
+            "errors": [
+                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
+                "(sub-account location ID and the calendar ID that powers the booking widget)."
+            ],
+        }
+
+    visits, err = get_visits(after_iso, before_iso)
+    if err:
+        return {
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "skipped": 0,
+            "errors": [err],
+        }
+
+    stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
+    seen_jobber_ids = set()
+
+    for v in visits:
+        vid = v.get("id")
+        if vid:
+            seen_jobber_ids.add(str(vid))
+    _upsert_visits_to_ghl_blocks(visits, stats, location_id, calendar_id)
+
     # Remove GHL blocks for visits not returned in this Jobber query (cancelled / rescheduled out of range).
     after_dt = parse_iso_datetime(after_iso)
     before_dt = parse_iso_datetime(before_iso)
@@ -150,4 +157,32 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
         row.delete()
         stats["deleted"] += 1
 
+    return stats
+
+
+def sync_jobber_job_to_ghl_blocks(job_id):
+    """
+    Sync visits for a single Jobber job to GHL block slots.
+    Intended for JOB_CREATE webhook handling.
+    """
+    location_id = config("GHL_LOCATION_ID", default=None)
+    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
+    if not location_id or not calendar_id:
+        return {
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "skipped": 0,
+            "errors": [
+                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
+                "(sub-account location ID and the calendar ID that powers the booking widget)."
+            ],
+        }
+
+    visits, err = get_job_visits(job_id)
+    if err:
+        return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [err]}
+
+    stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
+    _upsert_visits_to_ghl_blocks(visits, stats, location_id, calendar_id)
     return stats

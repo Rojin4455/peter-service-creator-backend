@@ -246,6 +246,36 @@ def get_visits(after_iso, before_iso):
     return nodes, None
 
 
+QUERY_JOB_VISITS = """
+query JobVisits($id: EncodedId!) {
+  job(id: $id) {
+    id
+    visits(first: 100) {
+      nodes {
+        id
+        title
+        startAt
+        endAt
+      }
+    }
+  }
+}
+"""
+
+
+def get_job_visits(job_id):
+    """
+    Get all visits for a given Jobber job.
+    Returns (list of visit dicts, error_message).
+    """
+    data, err = _request(QUERY_JOB_VISITS, {"id": job_id})
+    if err:
+        return [], err
+    job = (data or {}).get("job") or {}
+    visits = (job.get("visits") or {}).get("nodes") or []
+    return visits, None
+
+
 # -----------------------------------------------------------------------------
 # Get client's properties (need propertyId for job creation)
 # -----------------------------------------------------------------------------

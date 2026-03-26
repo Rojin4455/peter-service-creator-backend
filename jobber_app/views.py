@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
-from .sync_ghl_calendar import sync_jobber_visits_to_ghl_blocks
+from .sync_ghl_calendar import sync_jobber_job_to_ghl_blocks, sync_jobber_visits_to_ghl_blocks
 
 
 class JobberSearchClientsView(APIView):
@@ -510,3 +510,45 @@ class GhlCalendarSyncFromJobberView(APIView):
 
         result = sync_jobber_visits_to_ghl_blocks(after, before)
         return Response(result, status=status.HTTP_200_OK)
+
+
+def _can_run_jobber_webhook(request):
+    """
+    Allow webhook if X-Jobber-Webhook-Secret matches JOBBER_WEBHOOK_SECRET.
+    If secret is not configured, accept all requests (for quick local setup).
+    """
+    expected = config("JOBBER_WEBHOOK_SECRET", default="").strip()
+    if not expected:
+        return True
+    got = (request.headers.get("X-Jobber-Webhook-Secret") or "").strip()
+    return got == expected
+
+
+class JobberWebhookView(APIView):
+    """
+    POST — Receive Jobber webhook events.
+    Core behavior: on JOB_CREATE, sync that job's visits into GHL block slots.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_jobber_webhook(request):
+            return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        topic = str(payload.get("topic") or "").strip()
+        item_id = payload.get("itemId")
+
+        if topic != "JOB_CREATE":
+            return Response(
+                {"received": True, "ignored": True, "reason": f"Unsupported topic: {topic or 'unknown'}"},
+                status=status.HTTP_200_OK,
+            )
+        if not item_id:
+            return Response({"error": "Missing itemId for JOB_CREATE webhook"}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = sync_jobber_job_to_ghl_blocks(str(item_id))
+        return Response(
+            {"received": True, "topic": topic, "itemId": str(item_id), "sync": result},
+            status=status.HTTP_200_OK,
+        )

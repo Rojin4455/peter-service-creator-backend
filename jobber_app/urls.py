@@ -9,6 +9,7 @@ urlpatterns = [
     path("jobs/create/", views.JobberCreateJobView.as_view(), name="jobber-create-job"),
     path("booking/slot-info/", views.BookingSlotInfoView.as_view(), name="booking-slot-info"),
     path("booking/confirm/", views.BookingConfirmView.as_view(), name="booking-confirm"),
+    path("webhooks/jobber/", views.JobberWebhookView.as_view(), name="jobber-webhook"),
     path(
         "calendar/sync-from-jobber/",
         views.GhlCalendarSyncFromJobberView.as_view(),
