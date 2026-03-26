@@ -589,16 +589,26 @@ class JobberWebhookView(APIView):
                 payload = {}
 
         topic, item_id = _extract_jobber_webhook_fields(payload)
-        logger.info(
+        logger.warning(
             "Jobber webhook received: content_type=%s payload_keys=%s parsed_topic=%s parsed_item_id=%s",
             request.content_type,
             sorted(list(payload.keys())) if isinstance(payload, dict) else [],
             topic,
             str(item_id) if item_id is not None else None,
         )
+        print(
+            "[Jobber webhook] received content_type=%s keys=%s topic=%s item_id=%s"
+            % (
+                request.content_type,
+                sorted(list(payload.keys())) if isinstance(payload, dict) else [],
+                topic,
+                str(item_id) if item_id is not None else None,
+            )
+        )
 
         if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "JOB_CREATE"):
-            logger.info("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
+            logger.warning("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
+            print("[Jobber webhook] ignored topic=%s payload=%s" % (topic, payload))
             return Response(
                 {"received": True, "ignored": True, "reason": f"Unsupported topic: {topic or 'unknown'}"},
                 status=status.HTTP_200_OK,
@@ -611,7 +621,8 @@ class JobberWebhookView(APIView):
             result = sync_jobber_visit_to_ghl_blocks(str(item_id))
         else:
             result = sync_jobber_job_to_ghl_blocks(str(item_id))
-        logger.info("Jobber webhook sync result: topic=%s item_id=%s result=%s", topic, item_id, result)
+        logger.warning("Jobber webhook sync result: topic=%s item_id=%s result=%s", topic, item_id, result)
+        print("[Jobber webhook] sync topic=%s item_id=%s result=%s" % (topic, item_id, result))
         return Response(
             {"received": True, "topic": topic, "itemId": str(item_id), "sync": result},
             status=status.HTTP_200_OK,
