@@ -331,13 +331,12 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
             })
 
 
-        # Quoted Services (collect names of all selected services)
+        # Quoted Services (CHECKBOX field in GHL expects selected option values as a list)
         quoted_services = list(submission.selected_services.values_list("name", flat=True))
         if quoted_services:
-            services_string = ", ".join(quoted_services)  # e.g. "Service 1, Service 3, Service 7"
             custom_fields.append({
-                "id": "rRNtL51RsGoGDCAq3YrN",  # Selected Services custom field (TEXT)
-                "field_value": services_string
+                "id": "xi8gViqHfTAWqpsX4T4W",  # Select Services custom field (CHECKBOX)
+                "field_value": quoted_services
             })
 
         if submission.size_range:
