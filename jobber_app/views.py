@@ -537,11 +537,16 @@ def _extract_jobber_webhook_fields(payload):
     if not isinstance(payload, dict):
         return "", None
 
-    # Flatten one level for common nested shapes: {"data": {...}} / {"payload": {...}}
+    # Flatten common nested shapes:
+    # - {"data": {"webHookEvent": {...}}} (Jobber)
+    # - {"data": {...}}
+    # - {"payload": {...}}
     nested = payload.get("data") if isinstance(payload.get("data"), dict) else None
     if not nested and isinstance(payload.get("payload"), dict):
         nested = payload.get("payload")
     source = nested or payload
+    if isinstance(source.get("webHookEvent"), dict):
+        source = source.get("webHookEvent")
 
     # Case-insensitive lookup
     norm = {str(k).lower(): v for k, v in source.items()}
