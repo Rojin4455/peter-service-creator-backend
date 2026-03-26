@@ -1,6 +1,7 @@
 """
 Basic test endpoints for Jobber integration.
 """
+import json
 from datetime import timedelta
 
 from decouple import config
@@ -541,9 +542,26 @@ class JobberWebhookView(APIView):
         if not _can_run_jobber_webhook(request):
             return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
-        payload = request.data if isinstance(request.data, dict) else {}
-        topic = str(payload.get("topic") or "").strip()
-        item_id = payload.get("itemId")
+        # Jobber may send JSON or form-encoded payloads (QueryDict-like).
+        payload = {}
+        if hasattr(request.data, "get"):
+            try:
+                payload = request.data.dict() if hasattr(request.data, "dict") else dict(request.data)
+            except Exception:
+                payload = {}
+        if not payload and request.body:
+            try:
+                payload = json.loads(request.body.decode("utf-8"))
+            except Exception:
+                payload = {}
+
+        topic = str(payload.get("topic") or payload.get("event") or payload.get("type") or "").strip()
+        item_id = (
+            payload.get("itemId")
+            or payload.get("item_id")
+            or payload.get("resourceId")
+            or payload.get("resource_id")
+        )
 
         if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "JOB_CREATE"):
             return Response(
