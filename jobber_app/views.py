@@ -2,6 +2,7 @@
 Basic test endpoints for Jobber integration.
 """
 import json
+import logging
 from datetime import timedelta
 
 from decouple import config
@@ -17,6 +18,8 @@ from .sync_ghl_calendar import (
     sync_jobber_visit_to_ghl_blocks,
     sync_jobber_visits_to_ghl_blocks,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class JobberSearchClientsView(APIView):
@@ -529,6 +532,35 @@ def _can_run_jobber_webhook(request):
     return got == expected
 
 
+def _extract_jobber_webhook_fields(payload):
+    """Extract topic/item id from multiple possible webhook payload shapes."""
+    if not isinstance(payload, dict):
+        return "", None
+
+    # Flatten one level for common nested shapes: {"data": {...}} / {"payload": {...}}
+    nested = payload.get("data") if isinstance(payload.get("data"), dict) else None
+    if not nested and isinstance(payload.get("payload"), dict):
+        nested = payload.get("payload")
+    source = nested or payload
+
+    # Case-insensitive lookup
+    norm = {str(k).lower(): v for k, v in source.items()}
+    topic = str(
+        norm.get("topic")
+        or norm.get("event")
+        or norm.get("type")
+        or ""
+    ).strip()
+    item_id = (
+        norm.get("itemid")
+        or norm.get("item_id")
+        or norm.get("resourceid")
+        or norm.get("resource_id")
+        or norm.get("id")
+    )
+    return topic, item_id
+
+
 class JobberWebhookView(APIView):
     """
     POST — Receive Jobber webhook events.
@@ -540,6 +572,7 @@ class JobberWebhookView(APIView):
 
     def post(self, request):
         if not _can_run_jobber_webhook(request):
+            logger.warning("Jobber webhook forbidden: missing/invalid secret header")
             return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
         # Jobber may send JSON or form-encoded payloads (QueryDict-like).
@@ -555,26 +588,30 @@ class JobberWebhookView(APIView):
             except Exception:
                 payload = {}
 
-        topic = str(payload.get("topic") or payload.get("event") or payload.get("type") or "").strip()
-        item_id = (
-            payload.get("itemId")
-            or payload.get("item_id")
-            or payload.get("resourceId")
-            or payload.get("resource_id")
+        topic, item_id = _extract_jobber_webhook_fields(payload)
+        logger.info(
+            "Jobber webhook received: content_type=%s payload_keys=%s parsed_topic=%s parsed_item_id=%s",
+            request.content_type,
+            sorted(list(payload.keys())) if isinstance(payload, dict) else [],
+            topic,
+            str(item_id) if item_id is not None else None,
         )
 
         if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "JOB_CREATE"):
+            logger.info("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
             return Response(
                 {"received": True, "ignored": True, "reason": f"Unsupported topic: {topic or 'unknown'}"},
                 status=status.HTTP_200_OK,
             )
         if not item_id:
+            logger.warning("Jobber webhook invalid: missing item id for topic=%s payload=%s", topic, payload)
             return Response({"error": f"Missing itemId for {topic} webhook"}, status=status.HTTP_400_BAD_REQUEST)
 
         if topic in ("VISIT_CREATE", "VISIT_UPDATE"):
             result = sync_jobber_visit_to_ghl_blocks(str(item_id))
         else:
             result = sync_jobber_job_to_ghl_blocks(str(item_id))
+        logger.info("Jobber webhook sync result: topic=%s item_id=%s result=%s", topic, item_id, result)
         return Response(
             {"received": True, "topic": topic, "itemId": str(item_id), "sync": result},
             status=status.HTTP_200_OK,
