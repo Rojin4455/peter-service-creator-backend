@@ -7,7 +7,7 @@ import logging
 
 from decouple import config
 
-from .client import get_job_visits, get_visits
+from .client import get_job_visits, get_visit_by_id, get_visits
 from .ghl_calendar_client import (
     create_block_slot,
     delete_calendar_event,
@@ -34,6 +34,27 @@ def _extract_ghl_event_id(data):
             if ev.get(key):
                 return str(ev[key])
     return None
+
+
+def _base_stats():
+    return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
+
+
+def _get_ghl_sync_target():
+    location_id = config("GHL_LOCATION_ID", default=None)
+    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
+    if not location_id or not calendar_id:
+        return None, None, {
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "skipped": 0,
+            "errors": [
+                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
+                "(sub-account location ID and the calendar ID that powers the booking widget)."
+            ],
+        }
+    return location_id, calendar_id, None
 
 
 def _upsert_visits_to_ghl_blocks(visits, stats, location_id, calendar_id):
@@ -109,19 +130,9 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
 
     Returns dict: { created, updated, deleted, skipped, errors: [...] }
     """
-    location_id = config("GHL_LOCATION_ID", default=None)
-    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
-    if not location_id or not calendar_id:
-        return {
-            "created": 0,
-            "updated": 0,
-            "deleted": 0,
-            "skipped": 0,
-            "errors": [
-                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
-                "(sub-account location ID and the calendar ID that powers the booking widget)."
-            ],
-        }
+    location_id, calendar_id, err_stats = _get_ghl_sync_target()
+    if err_stats:
+        return err_stats
 
     visits, err = get_visits(after_iso, before_iso)
     if err:
@@ -133,7 +144,7 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
             "errors": [err],
         }
 
-    stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
+    stats = _base_stats()
     seen_jobber_ids = set()
 
     for v in visits:
@@ -165,24 +176,34 @@ def sync_jobber_job_to_ghl_blocks(job_id):
     Sync visits for a single Jobber job to GHL block slots.
     Intended for JOB_CREATE webhook handling.
     """
-    location_id = config("GHL_LOCATION_ID", default=None)
-    calendar_id = config("GHL_BOOKING_CALENDAR_ID", default=None)
-    if not location_id or not calendar_id:
-        return {
-            "created": 0,
-            "updated": 0,
-            "deleted": 0,
-            "skipped": 0,
-            "errors": [
-                "Set GHL_LOCATION_ID and GHL_BOOKING_CALENDAR_ID in environment "
-                "(sub-account location ID and the calendar ID that powers the booking widget)."
-            ],
-        }
+    location_id, calendar_id, err_stats = _get_ghl_sync_target()
+    if err_stats:
+        return err_stats
 
     visits, err = get_job_visits(job_id)
     if err:
         return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [err]}
 
-    stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": []}
+    stats = _base_stats()
     _upsert_visits_to_ghl_blocks(visits, stats, location_id, calendar_id)
+    return stats
+
+
+def sync_jobber_visit_to_ghl_blocks(visit_id):
+    """
+    Sync one Jobber visit to a GHL block slot.
+    Intended for VISIT_CREATE webhook handling.
+    """
+    location_id, calendar_id, err_stats = _get_ghl_sync_target()
+    if err_stats:
+        return err_stats
+
+    visit, err = get_visit_by_id(visit_id)
+    if err:
+        return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [err]}
+    if not visit:
+        return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [f"Visit not found: {visit_id}"]}
+
+    stats = _base_stats()
+    _upsert_visits_to_ghl_blocks([visit], stats, location_id, calendar_id)
     return stats

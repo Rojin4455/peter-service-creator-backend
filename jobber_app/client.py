@@ -276,6 +276,30 @@ def get_job_visits(job_id):
     return visits, None
 
 
+QUERY_VISIT_BY_ID = """
+query VisitById($id: EncodedId!) {
+  visit(id: $id) {
+    id
+    title
+    startAt
+    endAt
+  }
+}
+"""
+
+
+def get_visit_by_id(visit_id):
+    """
+    Get one visit by id.
+    Returns (visit dict or None, error_message).
+    """
+    data, err = _request(QUERY_VISIT_BY_ID, {"id": visit_id})
+    if err:
+        return None, err
+    visit = (data or {}).get("visit")
+    return visit, None
+
+
 # -----------------------------------------------------------------------------
 # Get client's properties (need propertyId for job creation)
 # -----------------------------------------------------------------------------

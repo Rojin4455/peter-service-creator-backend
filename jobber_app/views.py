@@ -11,7 +11,11 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
-from .sync_ghl_calendar import sync_jobber_job_to_ghl_blocks, sync_jobber_visits_to_ghl_blocks
+from .sync_ghl_calendar import (
+    sync_jobber_job_to_ghl_blocks,
+    sync_jobber_visit_to_ghl_blocks,
+    sync_jobber_visits_to_ghl_blocks,
+)
 
 
 class JobberSearchClientsView(APIView):
@@ -527,7 +531,9 @@ def _can_run_jobber_webhook(request):
 class JobberWebhookView(APIView):
     """
     POST — Receive Jobber webhook events.
-    Core behavior: on JOB_CREATE, sync that job's visits into GHL block slots.
+    Core behavior:
+      - VISIT_CREATE: sync that visit to GHL block slots
+      - JOB_CREATE: sync that job's visits to GHL block slots (fallback)
     """
     permission_classes = [AllowAny]
 
@@ -539,15 +545,18 @@ class JobberWebhookView(APIView):
         topic = str(payload.get("topic") or "").strip()
         item_id = payload.get("itemId")
 
-        if topic != "JOB_CREATE":
+        if topic not in ("VISIT_CREATE", "JOB_CREATE"):
             return Response(
                 {"received": True, "ignored": True, "reason": f"Unsupported topic: {topic or 'unknown'}"},
                 status=status.HTTP_200_OK,
             )
         if not item_id:
-            return Response({"error": "Missing itemId for JOB_CREATE webhook"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Missing itemId for {topic} webhook"}, status=status.HTTP_400_BAD_REQUEST)
 
-        result = sync_jobber_job_to_ghl_blocks(str(item_id))
+        if topic == "VISIT_CREATE":
+            result = sync_jobber_visit_to_ghl_blocks(str(item_id))
+        else:
+            result = sync_jobber_job_to_ghl_blocks(str(item_id))
         return Response(
             {"received": True, "topic": topic, "itemId": str(item_id), "sync": result},
             status=status.HTTP_200_OK,
