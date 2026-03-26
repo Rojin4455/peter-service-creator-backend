@@ -12,4 +12,5 @@ class JobberVisitGhlBlockMapAdmin(admin.ModelAdmin):
     list_max_show_all = 100
     list_editable = ("start_at", "end_at")
     list_display_links = ("jobber_visit_id", "ghl_event_id")
-    list_select_related = ("jobber_visit", "ghl_event")
+    # These are CharFields, not FK relations.
+    list_select_related = ()

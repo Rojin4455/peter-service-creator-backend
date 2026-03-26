@@ -532,7 +532,7 @@ class JobberWebhookView(APIView):
     """
     POST — Receive Jobber webhook events.
     Core behavior:
-      - VISIT_CREATE: sync that visit to GHL block slots
+      - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots
       - JOB_CREATE: sync that job's visits to GHL block slots (fallback)
     """
     permission_classes = [AllowAny]
@@ -545,7 +545,7 @@ class JobberWebhookView(APIView):
         topic = str(payload.get("topic") or "").strip()
         item_id = payload.get("itemId")
 
-        if topic not in ("VISIT_CREATE", "JOB_CREATE"):
+        if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "JOB_CREATE"):
             return Response(
                 {"received": True, "ignored": True, "reason": f"Unsupported topic: {topic or 'unknown'}"},
                 status=status.HTTP_200_OK,
@@ -553,7 +553,7 @@ class JobberWebhookView(APIView):
         if not item_id:
             return Response({"error": f"Missing itemId for {topic} webhook"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if topic == "VISIT_CREATE":
+        if topic in ("VISIT_CREATE", "VISIT_UPDATE"):
             result = sync_jobber_visit_to_ghl_blocks(str(item_id))
         else:
             result = sync_jobber_job_to_ghl_blocks(str(item_id))

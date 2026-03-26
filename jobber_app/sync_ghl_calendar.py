@@ -4,6 +4,7 @@ Sync Jobber visits (busy times) to GoHighLevel calendar block slots.
 Uses jobber_app.client.get_visits and jobber_app.ghl_calendar_client.
 """
 import logging
+import time
 
 from decouple import config
 
@@ -198,9 +199,18 @@ def sync_jobber_visit_to_ghl_blocks(visit_id):
     if err_stats:
         return err_stats
 
-    visit, err = get_visit_by_id(visit_id)
-    if err:
-        return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [err]}
+    # Jobber webhooks can arrive before the Visit query is immediately available.
+    visit = None
+    last_err = None
+    for i in range(3):
+        visit, err = get_visit_by_id(visit_id)
+        if visit:
+            break
+        last_err = err
+        if i < 2:
+            time.sleep(2)
+    if last_err and not visit:
+        return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [last_err]}
     if not visit:
         return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": [f"Visit not found: {visit_id}"]}
 
