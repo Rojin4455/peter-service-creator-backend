@@ -294,6 +294,97 @@ def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
     return f"{date_str}T{time_str}"
 
 
+def _normalize_booking_services(data):
+    """
+    Build job title and line_items for Jobber from booking payload.
+
+    Supports:
+    - Legacy: service_type (str) + package_title + approved_price → one line item.
+    - Multiple: service_types (list of strings) + shared package_title + approved_price
+      → equal split across line items (one per service type).
+    - Structured: services (list of objects) with per-line pricing:
+        { service_type, package_title?, package_description?, line_item_price | price }
+
+    Returns (job_title, line_items_list, error_message_or_None).
+    line_items_list items: {name, description, unit_price, quantity?}.
+    """
+    approved = data.get("approved_price") if data.get("approved_price") is not None else data.get("line_item_price")
+
+    # Structured multi-service rows
+    raw_services = data.get("services")
+    if isinstance(raw_services, list) and len(raw_services) > 0:
+        line_items = []
+        titles = []
+        for row in raw_services:
+            if not isinstance(row, dict):
+                return None, None, "Each services[] entry must be an object"
+            st = (row.get("service_type") or row.get("title") or "").strip()
+            pkg = (row.get("package_title") or row.get("line_item_name") or data.get("package_title") or "").strip()
+            desc = (row.get("package_description") or row.get("line_item_description") or data.get("package_description") or "").strip()
+            line_price = row.get("line_item_price") if row.get("line_item_price") is not None else row.get("price")
+            if st:
+                titles.append(st)
+            name = pkg or st or "Service"
+            if st and pkg and pkg.lower() != st.lower():
+                name = f"{pkg} — {st}"
+            elif st and not pkg:
+                name = st
+            if line_price is None:
+                return None, None, "Each services[] entry must include line_item_price or price when using services[]"
+            try:
+                float(line_price)
+            except (TypeError, ValueError):
+                return None, None, "services[] line_item_price must be numeric"
+            line_items.append({"name": name, "description": desc, "unit_price": float(line_price), "quantity": 1})
+        job_title = ", ".join(titles) if titles else (data.get("service_type") or "Multi-service")
+        return job_title, line_items, None
+
+    # List of service type labels + shared package / total price
+    raw_types = data.get("service_types")
+    if isinstance(raw_types, list) and len(raw_types) > 0:
+        types_clean = []
+        for t in raw_types:
+            s = str(t).strip() if t is not None else ""
+            if s:
+                types_clean.append(s)
+        if not types_clean:
+            return None, None, "service_types must contain at least one non-empty string"
+        if approved is None:
+            return None, None, "approved_price is required when using service_types[]"
+        try:
+            total = float(approved)
+        except (TypeError, ValueError):
+            return None, None, "approved_price must be a number"
+        n = len(types_clean)
+        share = round(total / n, 2)
+        # Fix rounding drift: last line absorbs remainder
+        remainder = round(total - share * (n - 1), 2)
+        pkg = (data.get("package_title") or data.get("line_item_name") or "").strip()
+        desc = (data.get("package_description") or data.get("line_item_description") or "").strip()
+        line_items = []
+        for i, st in enumerate(types_clean):
+            price = remainder if i == n - 1 else share
+            name = f"{pkg} ({st})" if pkg else st
+            line_items.append({"name": name, "description": desc, "unit_price": price, "quantity": 1})
+        job_title = ", ".join(types_clean)
+        return job_title, line_items, None
+
+    # Single legacy field
+    service_type = (data.get("service_type") or data.get("title") or "").strip()
+    if not service_type:
+        return None, None, None
+    if approved is None:
+        return None, None, None
+    pkg = (data.get("package_title") or data.get("line_item_name") or "").strip()
+    desc = (data.get("package_description") or data.get("line_item_description") or "").strip()
+    try:
+        float(approved)
+    except (TypeError, ValueError):
+        return None, None, "approved_price must be a number"
+    line_items = [{"name": pkg or service_type, "description": desc, "unit_price": float(approved), "quantity": 1}]
+    return service_type, line_items, None
+
+
 class BookingSlotInfoView(APIView):
     """
     GET /api/jobber/booking/slot-info/?price=525&service_type=Residential First Clean&team_size=2
@@ -350,7 +441,12 @@ class BookingConfirmView(APIView):
     Request body (from Pricing Calculator):
       Client: first_name, last_name, email, phone (at least one of email/phone).
       Address: street1 (or service_address), city, province, postal_code; optional street2.
-      Service: service_type (job title), package_title, package_description, approved_price; optional add_ons.
+      Service (choose one shape):
+        - Legacy single: service_type (job title), package_title, package_description, approved_price.
+        - Multiple labels: service_types (string array), package_title, package_description, approved_price
+          (total is split evenly across line items).
+        - Structured: services (array of { service_type, package_title?, package_description?, line_item_price | price }).
+      Optional add_ons.
       Job details: bedrooms, bathrooms, square_footage, condition, pets, special_instructions, entry_instructions; optional estimated_labor_hours.
       Booking: scheduled_start_iso (ISO 8601) OR selected_date + selected_time.
     """
@@ -371,11 +467,6 @@ class BookingConfirmView(APIView):
         province = (data.get("province") or data.get("state") or "").strip()
         postal_code = (data.get("postal_code") or data.get("zip_code") or "").strip()
         street2 = (data.get("street2") or "").strip() or None
-        # Service
-        service_type = (data.get("service_type") or data.get("title") or "").strip()
-        package_title = (data.get("package_title") or data.get("line_item_name") or "").strip()
-        package_description = (data.get("package_description") or data.get("line_item_description") or "").strip()
-        approved_price = data.get("approved_price") if data.get("approved_price") is not None else data.get("line_item_price")
         add_ons = (data.get("add_ons") or "").strip() or None
         # Booking time
         scheduled_start_iso = _parse_booking_datetime(
@@ -394,21 +485,28 @@ class BookingConfirmView(APIView):
                 {"error": "At least one of email or phone is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not service_type:
+
+        job_title, line_items, norm_err = _normalize_booking_services(data)
+        if norm_err:
+            return Response({"error": norm_err}, status=status.HTTP_400_BAD_REQUEST)
+        if not line_items or not job_title:
             return Response(
-                {"error": "service_type (job title) is required (e.g. Residential First Clean)"},
+                {
+                    "error": "Provide service_type (single), service_types (array of strings), or services (array of objects with per-line pricing).",
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not package_title:
-            return Response(
-                {"error": "package_title is required (e.g. Basic Package)"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if approved_price is None:
-            return Response(
-                {"error": "approved_price is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+
+        # package_title required for legacy single-service UX; for multi service_types allow omit if only types sent
+        has_structured = isinstance(data.get("services"), list) and len(data.get("services") or []) > 0
+        has_multi_types = isinstance(data.get("service_types"), list) and len(data.get("service_types") or []) > 0
+        if not has_structured and not has_multi_types:
+            package_title = (data.get("package_title") or data.get("line_item_name") or "").strip()
+            if not package_title:
+                return Response(
+                    {"error": "package_title is required (e.g. Basic Package) when using single service_type"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # 1) Find or create client
         search_term = email or phone
@@ -453,12 +551,10 @@ class BookingConfirmView(APIView):
         job_notes = _build_booking_job_notes(data)
         job, err = create_job(
             property_id=prop_id,
-            title=service_type,
-            line_item_name=package_title,
-            line_item_description=package_description,
-            line_item_price=approved_price,
+            title=job_title,
             job_notes=job_notes,
             scheduled_start_iso=scheduled_start_iso,
+            line_items=line_items,
         )
         if err:
             return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)

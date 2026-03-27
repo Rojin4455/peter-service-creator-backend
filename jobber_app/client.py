@@ -439,12 +439,13 @@ mutation JobCreate($input: JobCreateAttributes!) {
 def create_job(
     property_id,
     title,
-    line_item_name,
-    line_item_description,
-    line_item_price,
+    line_item_name=None,
+    line_item_description=None,
+    line_item_price=None,
     job_notes=None,
     scheduled_start_iso=None,
     invoicing=None,
+    line_items=None,
 ):
     """
     Create a one-off job in Jobber.
@@ -452,24 +453,67 @@ def create_job(
     Args:
         property_id: Jobber property encoded ID (from get_client_properties(client_id)).
         title: Job title (e.g. "Residential First Clean", "Move-In Cleaning").
-        line_item_name: Package/service name (e.g. "Basic Package").
+        line_item_name: Package/service name (e.g. "Basic Package") — used when line_items is omitted.
         line_item_description: Full package details / cleaning inclusions.
-        line_item_price: Approved quote total (decimal/float).
+        line_item_price: Approved quote total (decimal/float) — used when line_items is omitted.
         job_notes: Optional job instructions/notes.
         scheduled_start_iso: Optional ISO 8601 datetime for the visit.
         invoicing: Required by Jobber. Defaults to fixed one-time. Pass dict from GraphiQL
                   JobInvoicingAttributes if needed (e.g. billingType, invoiceSchedule).
+        line_items: Optional list of dicts: name, description (optional), unit_price, quantity (optional).
+                    When provided, builds multiple Jobber line items (multi-service booking).
 
     Returns:
         (job dict or None, error_message).
     """
-    try:
-        price_float = float(line_item_price)
-    except (TypeError, ValueError):
-        return None, "line_item_price must be a number"
-
     if not property_id:
         return None, "property_id is required (get it from get_client_properties(client_id))"
+
+    built_line_items = []
+    if line_items:
+        for li in line_items:
+            if not isinstance(li, dict):
+                return None, "Each line_items entry must be an object"
+            name = (li.get("name") or "").strip() or "Service"
+            desc = (li.get("description") or "").strip()
+            try:
+                up = float(li.get("unit_price"))
+            except (TypeError, ValueError):
+                return None, f"line_items entry must include numeric unit_price: {li!r}"
+            qty = li.get("quantity", 1)
+            try:
+                qty = int(qty)
+            except (TypeError, ValueError):
+                qty = 1
+            if qty < 1:
+                qty = 1
+            built_line_items.append(
+                {
+                    "name": name,
+                    "description": desc,
+                    "unitPrice": round(up, 2),
+                    "quantity": qty,
+                    "category": "SERVICE",
+                    "saveToProductsAndServices": False,
+                }
+            )
+        if not built_line_items:
+            return None, "line_items must not be empty"
+    else:
+        try:
+            price_float = float(line_item_price)
+        except (TypeError, ValueError):
+            return None, "line_item_price must be a number"
+        built_line_items = [
+            {
+                "name": line_item_name or "Service",
+                "description": line_item_description or "",
+                "unitPrice": round(price_float, 2),
+                "quantity": 1,
+                "category": "SERVICE",
+                "saveToProductsAndServices": False,
+            }
+        ]
 
     # Jobber: invoicingType = BillingStrategy (FIXED_PRICE | VISIT_BASED),
     #         invoicingSchedule = BillingFrequencyEnum (ON_COMPLETION | PERIODIC | PER_VISIT | NEVER).
@@ -490,16 +534,7 @@ def create_job(
         "propertyId": property_id,
         "invoicing": invoicing,
         "title": title or "Cleaning Job",
-        "lineItems": [
-            {
-                "name": line_item_name or "Service",
-                "description": line_item_description or "",
-                "unitPrice": round(price_float, 2),
-                "quantity": 1,
-                "category": "SERVICE",
-                "saveToProductsAndServices": False,
-            }
-        ],
+        "lineItems": built_line_items,
     }
     # instructions = schedule instructions; notes = array of JobCreateNoteInput (Internal notes / Note details).
     if job_notes:
