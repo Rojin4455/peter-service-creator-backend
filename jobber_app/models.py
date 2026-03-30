@@ -24,3 +24,29 @@ class JobberVisitGhlBlockMap(models.Model):
 
     def __str__(self):
         return f"{self.jobber_visit_id} → {self.ghl_event_id}"
+
+
+class JobberClientGhlTagSyncState(models.Model):
+    """
+    Tracks last tag sync direction/signature for a Jobber client to reduce ping-pong
+    when both Jobber and GHL fire updates after we push.
+    """
+
+    jobber_client_id = models.CharField(max_length=255, unique=True, db_index=True)
+    ghl_contact_id = models.CharField(max_length=255, blank=True, default="")
+    last_jobber_tag_signature = models.CharField(max_length=64, blank=True, default="")
+    last_ghl_tag_signature = models.CharField(max_length=64, blank=True, default="")
+    last_sync_source = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        help_text="'jobber' or 'ghl' — which system we last pushed from.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "jobber_client_ghl_tag_sync_state"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.jobber_client_id} ↔ {self.ghl_contact_id or '?'}"

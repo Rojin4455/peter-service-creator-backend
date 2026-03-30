@@ -19,6 +19,7 @@ from .sync_ghl_calendar import (
     sync_jobber_visit_to_ghl_blocks,
     sync_jobber_visits_to_ghl_blocks,
 )
+from .tag_sync import sync_ghl_contact_tags_to_jobber, sync_jobber_client_tags_to_ghl
 
 logger = logging.getLogger(__name__)
 
@@ -629,6 +630,22 @@ def _can_run_jobber_webhook(request):
     return got == expected
 
 
+def _parse_webhook_json_payload(request):
+    """DRF QueryDict or raw JSON body → dict."""
+    payload = {}
+    if hasattr(request.data, "get"):
+        try:
+            payload = request.data.dict() if hasattr(request.data, "dict") else dict(request.data)
+        except Exception:
+            payload = {}
+    if not payload and request.body:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _extract_jobber_webhook_fields(payload):
     """Extract topic/item id from multiple possible webhook payload shapes."""
     if not isinstance(payload, dict):
@@ -667,6 +684,7 @@ class JobberWebhookView(APIView):
     """
     POST — Receive Jobber webhook events.
     Core behavior:
+      - CLIENT_CREATE / CLIENT_UPDATE: sync client tags → GHL contact tags
       - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots
       - VISIT_DESTROY: delete mapped GHL block slot
       - JOB_CREATE: sync that job's visits to GHL block slots (fallback)
@@ -678,19 +696,7 @@ class JobberWebhookView(APIView):
             logger.warning("Jobber webhook forbidden: missing/invalid secret header")
             return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Jobber may send JSON or form-encoded payloads (QueryDict-like).
-        payload = {}
-        if hasattr(request.data, "get"):
-            try:
-                payload = request.data.dict() if hasattr(request.data, "dict") else dict(request.data)
-            except Exception:
-                payload = {}
-        if not payload and request.body:
-            try:
-                payload = json.loads(request.body.decode("utf-8"))
-            except Exception:
-                payload = {}
-
+        payload = _parse_webhook_json_payload(request)
         topic, item_id = _extract_jobber_webhook_fields(payload)
         logger.warning(
             "Jobber webhook received: content_type=%s payload_keys=%s parsed_topic=%s parsed_item_id=%s",
@@ -709,7 +715,14 @@ class JobberWebhookView(APIView):
             )
         )
 
-        if topic not in ("VISIT_CREATE", "VISIT_UPDATE", "VISIT_DESTROY", "JOB_CREATE"):
+        if topic not in (
+            "CLIENT_CREATE",
+            "CLIENT_UPDATE",
+            "VISIT_CREATE",
+            "VISIT_UPDATE",
+            "VISIT_DESTROY",
+            "JOB_CREATE",
+        ):
             logger.warning("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
             print("[Jobber webhook] ignored topic=%s payload=%s" % (topic, payload))
             return Response(
@@ -719,6 +732,15 @@ class JobberWebhookView(APIView):
         if not item_id:
             logger.warning("Jobber webhook invalid: missing item id for topic=%s payload=%s", topic, payload)
             return Response({"error": f"Missing itemId for {topic} webhook"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if topic in ("CLIENT_CREATE", "CLIENT_UPDATE"):
+            result = sync_jobber_client_tags_to_ghl(str(item_id))
+            logger.warning("Jobber webhook tag_sync result: topic=%s item_id=%s result=%s", topic, item_id, result)
+            print("[Jobber webhook] tag_sync topic=%s item_id=%s result=%s" % (topic, item_id, result))
+            return Response(
+                {"received": True, "topic": topic, "itemId": str(item_id), "tag_sync": result},
+                status=status.HTTP_200_OK,
+            )
 
         if topic in ("VISIT_CREATE", "VISIT_UPDATE"):
             result = sync_jobber_visit_to_ghl_blocks(str(item_id))
@@ -732,3 +754,71 @@ class JobberWebhookView(APIView):
             {"received": True, "topic": topic, "itemId": str(item_id), "sync": result},
             status=status.HTTP_200_OK,
         )
+
+
+def _can_run_ghl_tag_sync_webhook(request):
+    """Optional secret for inbound GHL → Jobber tag webhooks."""
+    expected = config("GHL_TAG_SYNC_WEBHOOK_SECRET", default="").strip()
+    if not expected:
+        return True
+    got = (request.headers.get("X-GHL-Tag-Sync-Secret") or "").strip()
+    return got == expected
+
+
+class GhlContactTagsWebhookView(APIView):
+    """
+    POST — Inbound webhook when GHL contact tags change (configure in GHL workflow / HTTP action).
+
+    Auth: set GHL_TAG_SYNC_WEBHOOK_SECRET and send header X-GHL-Tag-Sync-Secret (recommended).
+
+    Body (JSON), flexible shapes:
+      - { "contactId": "...", "tags": ["a", "b"] }
+      - { "contact_id": "...", "tags": [...] }
+      - { "contact": { "id": "...", "tags": [...] } }
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_tag_sync_webhook(request):
+            return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        data = _parse_webhook_json_payload(request)
+        contact_id = data.get("contactId") or data.get("contact_id")
+        tags = data.get("tags")
+        c = data.get("contact")
+        if isinstance(c, dict):
+            contact_id = contact_id or c.get("id")
+            if tags is None:
+                tags = c.get("tags")
+        if not contact_id:
+            return Response({"error": "contactId required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if tags is not None and not isinstance(tags, list):
+            tags = None
+
+        result = sync_ghl_contact_tags_to_jobber(str(contact_id), tag_names_from_payload=tags)
+        status_code = status.HTTP_200_OK if result.get("ok") or result.get("skipped") else status.HTTP_502_BAD_GATEWAY
+        return Response({"received": True, "contactId": str(contact_id), "tag_sync": result}, status=status_code)
+
+
+class JobberClientSyncTagsToGhlView(APIView):
+    """
+    POST — Manually push Jobber client tags to GHL (same logic as CLIENT_UPDATE webhook).
+
+    Body: { "jobber_client_id": "<encoded id>" }
+    Auth: same as calendar sync (X-GHL-Calendar-Sync-Secret or admin).
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_calendar_sync(request):
+            return Response(
+                {"error": "Forbidden. Provide X-GHL-Calendar-Sync-Secret or authenticate as admin."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        client_id = (request.data.get("jobber_client_id") or request.query_params.get("jobber_client_id") or "").strip()
+        if not client_id:
+            return Response({"error": "jobber_client_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        result = sync_jobber_client_tags_to_ghl(client_id)
+        status_code = status.HTTP_200_OK if result.get("ok") or result.get("skipped") else status.HTTP_502_BAD_GATEWAY
+        return Response({"tag_sync": result}, status=status_code)

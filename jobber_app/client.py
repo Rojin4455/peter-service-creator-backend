@@ -554,3 +554,176 @@ def create_job(
         return None, msg
     job = result.get("job")
     return job, None
+
+
+# -----------------------------------------------------------------------------
+# Client tags (sync with GHL contact tags)
+# Jobber Tag fields: use GraphiQL if `name` vs `label` differs for your API version.
+# -----------------------------------------------------------------------------
+
+QUERY_CLIENT_TAG_SYNC = """
+query ClientTagSync($id: EncodedId!) {
+  client(id: $id) {
+    id
+    firstName
+    lastName
+    emails { address }
+    phones { number }
+    tags(first: 100) {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+}
+"""
+
+QUERY_ACCOUNT_TAGS = """
+query JobberAccountTags {
+  account {
+    tags(first: 250) {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+}
+"""
+
+QUERY_ROOT_TAGS = """
+query JobberRootTags {
+  tags(first: 250) {
+    nodes {
+      id
+      name
+    }
+  }
+}
+"""
+
+MUTATION_CLIENT_UPDATE = """
+mutation ClientUpdateTags($input: ClientUpdateInput!) {
+  clientUpdate(input: $input) {
+    client {
+      id
+      tags(first: 100) {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def _tag_node_display_name(node):
+    if not node or not isinstance(node, dict):
+        return ""
+    return (node.get("name") or node.get("label") or "").strip()
+
+
+def get_client_for_tag_sync(client_id):
+    """
+    Fetch Jobber client with emails, phones, and tags.
+    Returns (client dict or None, error_message).
+    """
+    data, err = _request(QUERY_CLIENT_TAG_SYNC, {"id": client_id})
+    if err:
+        return None, err
+    client = (data or {}).get("client")
+    if not client:
+        return None, "Client not found"
+    return client, None
+
+
+def get_account_tag_name_to_id():
+    """
+    Map lowercased tag name -> Jobber tag id for the connected account.
+    Returns dict (may be empty if query shape differs).
+    """
+    for q in (QUERY_ACCOUNT_TAGS, QUERY_ROOT_TAGS):
+        data, err = _request(q)
+        if err:
+            continue
+        conn = None
+        acc = (data or {}).get("account")
+        if isinstance(acc, dict):
+            conn = acc.get("tags")
+        if not conn and isinstance((data or {}).get("tags"), dict):
+            conn = data.get("tags")
+        if not conn:
+            continue
+        nodes = conn.get("nodes") or []
+        out = {}
+        for n in nodes:
+            tid = n.get("id")
+            nm = _tag_node_display_name(n)
+            if tid and nm:
+                out[nm.lower()] = tid
+        if out:
+            return out
+    return {}
+
+
+def list_client_tag_names(client_id):
+    """Return sorted list of tag display names for a client."""
+    client, err = get_client_for_tag_sync(client_id)
+    if err or not client:
+        return [], err or "Client not found"
+    nodes = ((client.get("tags") or {}).get("nodes")) or []
+    names = []
+    for n in nodes:
+        nm = _tag_node_display_name(n)
+        if nm:
+            names.append(nm)
+    return sorted(set(names)), None
+
+
+def set_client_tags_by_names(client_id, tag_names):
+    """
+    Replace Jobber client tags to match the given display names (best effort).
+    Resolves names to ids via account tag list; names with no matching Jobber tag are skipped.
+
+    Returns (True, None) or (False, error_message).
+    """
+    if not client_id:
+        return False, "client_id is required"
+    tag_names = tag_names or []
+    name_to_id = get_account_tag_name_to_id()
+    if not name_to_id and tag_names:
+        return False, "Could not load Jobber account tags; cannot map names to ids"
+    tag_ids = []
+    seen = set()
+    for raw in tag_names:
+        nm = str(raw).strip()
+        if not nm:
+            continue
+        tid = name_to_id.get(nm.lower())
+        if not tid:
+            logger.warning("Jobber tag name not found in account, skipping: %s", nm)
+            continue
+        if tid not in seen:
+            seen.add(tid)
+            tag_ids.append(tid)
+    input_obj = {"id": client_id, "tagIds": tag_ids}
+    data, err = _request(MUTATION_CLIENT_UPDATE, {"input": input_obj})
+    if err:
+        # Retry with clientId if schema uses that field name
+        input_obj_alt = {"clientId": client_id, "tagIds": tag_ids}
+        data, err = _request(MUTATION_CLIENT_UPDATE, {"input": input_obj_alt})
+    if err:
+        return False, err
+    result = (data or {}).get("clientUpdate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return False, msg
+    return True, None

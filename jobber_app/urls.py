@@ -11,6 +11,16 @@ urlpatterns = [
     path("booking/confirm/", views.BookingConfirmView.as_view(), name="booking-confirm"),
     path("webhooks/jobber/", views.JobberWebhookView.as_view(), name="jobber-webhook"),
     path(
+        "webhooks/ghl/contact-tags/",
+        views.GhlContactTagsWebhookView.as_view(),
+        name="ghl-contact-tags-webhook",
+    ),
+    path(
+        "clients/sync-tags-to-ghl/",
+        views.JobberClientSyncTagsToGhlView.as_view(),
+        name="jobber-client-sync-tags-to-ghl",
+    ),
+    path(
         "calendar/sync-from-jobber/",
         views.GhlCalendarSyncFromJobberView.as_view(),
         name="ghl-calendar-sync-from-jobber",
