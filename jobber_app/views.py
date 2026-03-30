@@ -765,6 +765,47 @@ def _can_run_ghl_tag_sync_webhook(request):
     return got == expected
 
 
+def _ghl_webhook_payload_merged(data):
+    """Flatten top-level + optional `body` object from GHL HTTP actions."""
+    if not isinstance(data, dict):
+        return {}
+    merged = dict(data)
+    body = data.get("body")
+    if isinstance(body, dict):
+        merged.update(body)
+    return merged
+
+
+def _extract_ghl_webhook_contact_id(data):
+    """
+    Resolve contact id from GHL workflow / webhook JSON (nested shapes, body wrapper, common keys).
+    """
+    merged = _ghl_webhook_payload_merged(data)
+    if not merged:
+        return None
+    contact_id = merged.get("contactId") or merged.get("contact_id") or merged.get("ContactId")
+    c = merged.get("contact")
+    if isinstance(c, dict):
+        contact_id = contact_id or c.get("id") or c.get("contactId")
+    if not contact_id:
+        lowered = {str(k).lower(): v for k, v in merged.items()}
+        contact_id = lowered.get("contactid") or lowered.get("contact_id")
+    if contact_id is not None:
+        contact_id = str(contact_id).strip()
+    return contact_id or None
+
+
+def _extract_ghl_webhook_tags(data):
+    """Optional tag list from payload; must be a list of strings or mixed (normalized upstream)."""
+    merged = _ghl_webhook_payload_merged(data)
+    tags = merged.get("tags")
+    if tags is None:
+        c = merged.get("contact")
+        if isinstance(c, dict):
+            tags = c.get("tags")
+    return tags if isinstance(tags, list) else None
+
+
 class GhlContactTagsWebhookView(APIView):
     """
     POST — Inbound webhook when GHL contact tags change (configure in GHL workflow / HTTP action).
@@ -783,21 +824,23 @@ class GhlContactTagsWebhookView(APIView):
             return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
         data = _parse_webhook_json_payload(request)
-        contact_id = data.get("contactId") or data.get("contact_id")
-        tags = data.get("tags")
-        c = data.get("contact")
-        if isinstance(c, dict):
-            contact_id = contact_id or c.get("id")
-            if tags is None:
-                tags = c.get("tags")
+        contact_id = _extract_ghl_webhook_contact_id(data)
+        tags = _extract_ghl_webhook_tags(data)
         if not contact_id:
+            logger.warning(
+                "GHL contact-tags webhook missing contactId; keys=%s",
+                sorted(data.keys()) if isinstance(data, dict) else [],
+            )
             return Response({"error": "contactId required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if tags is not None and not isinstance(tags, list):
-            tags = None
 
         result = sync_ghl_contact_tags_to_jobber(str(contact_id), tag_names_from_payload=tags)
         status_code = status.HTTP_200_OK if result.get("ok") or result.get("skipped") else status.HTTP_502_BAD_GATEWAY
+        if status_code != status.HTTP_200_OK:
+            logger.warning(
+                "GHL contact-tags webhook sync failed contactId=%s error=%s",
+                contact_id,
+                result.get("error"),
+            )
         return Response({"received": True, "contactId": str(contact_id), "tag_sync": result}, status=status_code)
 
 

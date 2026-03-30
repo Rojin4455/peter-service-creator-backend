@@ -649,9 +649,12 @@ def get_account_tag_name_to_id():
     Map lowercased tag name -> Jobber tag id for the connected account.
     Returns dict (may be empty if query shape differs).
     """
+    last_err = None
     for q in (QUERY_ACCOUNT_TAGS, QUERY_ROOT_TAGS):
         data, err = _request(q)
         if err:
+            last_err = err
+            logger.warning("Jobber account tags query failed: %s", err)
             continue
         conn = None
         acc = (data or {}).get("account")
@@ -670,7 +673,29 @@ def get_account_tag_name_to_id():
                 out[nm.lower()] = tid
         if out:
             return out
+    if last_err:
+        logger.warning("Jobber account tags: no nodes resolved; last query error: %s", last_err)
     return {}
+
+
+def get_client_tag_label_to_id(client_id):
+    """
+    Map lowercased label -> tag id from tags already on this client.
+    Helps when account-level tag listing returns empty but client tags are present.
+    """
+    if not client_id:
+        return {}
+    client, err = get_client_for_tag_sync(client_id)
+    if err or not client:
+        return {}
+    nodes = ((client.get("tags") or {}).get("nodes")) or []
+    out = {}
+    for n in nodes:
+        tid = n.get("id")
+        nm = _tag_node_display_name(n)
+        if tid and nm:
+            out[nm.lower()] = tid
+    return out
 
 
 def list_client_tag_names(client_id):
@@ -697,9 +722,16 @@ def set_client_tags_by_names(client_id, tag_names):
     if not client_id:
         return False, "client_id is required"
     tag_names = tag_names or []
-    name_to_id = get_account_tag_name_to_id()
+    account_map = get_account_tag_name_to_id()
+    client_map = get_client_tag_label_to_id(client_id)
+    # Account catalog wins on key collision; client map fills gaps (e.g. account query unavailable).
+    name_to_id = {**client_map, **account_map}
     if not name_to_id and tag_names:
-        return False, "Could not load Jobber account tags; cannot map names to ids"
+        return (
+            False,
+            "Could not load Jobber tags (account tag list and client tags empty); "
+            "cannot map tag names to ids. Check Jobber GraphQL access and tag queries.",
+        )
     tag_ids = []
     seen = set()
     for raw in tag_names:

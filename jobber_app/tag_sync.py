@@ -20,6 +20,7 @@ from .ghl_contacts import (
     _location_id,
     find_ghl_contact_for_jobber_client,
     get_contact_by_id,
+    ghl_contact_email_and_phone,
     normalize_ghl_tags,
     update_contact_tags,
 )
@@ -164,8 +165,7 @@ def sync_ghl_contact_tags_to_jobber(ghl_contact_id, tag_names_from_payload=None)
 
     ghl_sig = _signature(ghl_tags)
 
-    email = (contact.get("email") or "").strip()
-    phone = (contact.get("phone") or contact.get("phoneNumber") or "").strip()
+    email, phone = ghl_contact_email_and_phone(contact)
     if not email and not phone:
         return {"ok": False, "error": "GHL contact has no email or phone to match Jobber client", "ghl_contact_id": ghl_contact_id}
 

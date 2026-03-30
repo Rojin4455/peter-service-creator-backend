@@ -166,6 +166,43 @@ def find_ghl_contact_for_jobber_client(client_dict, location_id):
     return None, None
 
 
+def ghl_contact_email_and_phone(contact):
+    """
+    Primary email/phone from a LeadConnector contact dict (handles common alternate fields).
+    """
+    if not isinstance(contact, dict):
+        return "", ""
+    email = (contact.get("email") or "").strip()
+    if not email:
+        email = (contact.get("emailLowerCase") or "").strip()
+    if not email:
+        add = contact.get("additionalEmails") or []
+        if isinstance(add, list):
+            for item in add:
+                if isinstance(item, str) and item.strip():
+                    email = item.strip()
+                    break
+                if isinstance(item, dict):
+                    e = (item.get("email") or item.get("value") or "").strip()
+                    if e:
+                        email = e
+                        break
+    phone = (contact.get("phone") or contact.get("phoneNumber") or "").strip()
+    if not phone:
+        alt = contact.get("additionalPhones") or []
+        if isinstance(alt, list):
+            for item in alt:
+                if isinstance(item, str) and item.strip():
+                    phone = item.strip()
+                    break
+                if isinstance(item, dict):
+                    p = (item.get("phone") or item.get("phoneNumber") or item.get("value") or "").strip()
+                    if p:
+                        phone = p
+                        break
+    return email, phone
+
+
 def normalize_ghl_tags(contact):
     """Return list of tag strings from a GHL contact dict."""
     if not isinstance(contact, dict):
@@ -179,8 +216,8 @@ def normalize_ghl_tags(contact):
     for t in tags:
         if isinstance(t, str) and t.strip():
             out.append(t.strip())
-        elif isinstance(t, dict) and t.get("name"):
-            s = str(t.get("name")).strip()
+        elif isinstance(t, dict):
+            s = str(t.get("name") or t.get("label") or t.get("tag") or "").strip()
             if s:
                 out.append(s)
     return sorted(set(out))
