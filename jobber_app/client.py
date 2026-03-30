@@ -558,7 +558,7 @@ def create_job(
 
 # -----------------------------------------------------------------------------
 # Client tags (sync with GHL contact tags)
-# Jobber Tag fields: use GraphiQL if `name` vs `label` differs for your API version.
+# Jobber Tag type exposes `label` (not `name`) in current GraphQL API versions.
 # -----------------------------------------------------------------------------
 
 QUERY_CLIENT_TAG_SYNC = """
@@ -572,7 +572,7 @@ query ClientTagSync($id: EncodedId!) {
     tags(first: 100) {
       nodes {
         id
-        name
+        label
       }
     }
   }
@@ -585,7 +585,7 @@ query JobberAccountTags {
     tags(first: 250) {
       nodes {
         id
-        name
+        label
       }
     }
   }
@@ -597,7 +597,7 @@ query JobberRootTags {
   tags(first: 250) {
     nodes {
       id
-      name
+      label
     }
   }
 }
@@ -611,7 +611,7 @@ mutation ClientUpdateTags($input: ClientUpdateInput!) {
       tags(first: 100) {
         nodes {
           id
-          name
+          label
         }
       }
     }
@@ -627,7 +627,7 @@ mutation ClientUpdateTags($input: ClientUpdateInput!) {
 def _tag_node_display_name(node):
     if not node or not isinstance(node, dict):
         return ""
-    return (node.get("name") or node.get("label") or "").strip()
+    return (node.get("label") or node.get("name") or "").strip()
 
 
 def get_client_for_tag_sync(client_id):
