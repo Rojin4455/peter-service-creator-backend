@@ -8,14 +8,47 @@ import logging
 
 from .client import append_ghl_note_to_jobber_client, search_clients
 from .ghl_contacts import (
+    _get_credentials,
+    _location_id,
     get_contact_by_id,
     get_note_by_id,
+    search_contact_notes,
     ghl_contact_email_and_phone,
     note_dict_body,
 )
 from .models import JobberGhlNoteForward
 
 logger = logging.getLogger(__name__)
+
+
+def _latest_ghl_note_for_contact(ghl_contact_id):
+    """Best-effort latest note for a contact via /notes/search."""
+    creds = _get_credentials()
+    if not creds:
+        return None, "GHL not connected"
+    location_id = _location_id(creds)
+    if not location_id:
+        return None, "GHL location id missing"
+    notes, err = search_contact_notes(location_id, ghl_contact_id, limit=10, offset=0)
+    if err:
+        return None, err
+    if not notes:
+        return None, "No GHL notes found for this contact"
+
+    def _sort_key(n):
+        # Prefer created/date-added-ish fields (ISO strings sort lexicographically).
+        if not isinstance(n, dict):
+            return ""
+        return str(
+            n.get("dateAdded")
+            or n.get("createdAt")
+            or n.get("updatedAt")
+            or n.get("lastUpdated")
+            or ""
+        )
+
+    notes_sorted = sorted(notes, key=_sort_key, reverse=True)
+    return notes_sorted[0], None
 
 
 def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
@@ -31,8 +64,19 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
 
     if not ghl_contact_id:
         return {"ok": False, "error": "contactId required"}
+    latest_note = None
     if not ghl_note_id:
-        return {"ok": False, "error": "note id required"}
+        latest_note, lerr = _latest_ghl_note_for_contact(ghl_contact_id)
+        if lerr or not latest_note:
+            return {"ok": False, "error": lerr or "Could not resolve latest note", "ghl_contact_id": ghl_contact_id}
+        ghl_note_id = str(
+            latest_note.get("id")
+            or latest_note.get("noteId")
+            or latest_note.get("note_id")
+            or ""
+        ).strip()
+        if not ghl_note_id:
+            return {"ok": False, "error": "Latest GHL note has no id", "ghl_contact_id": ghl_contact_id}
 
     if JobberGhlNoteForward.objects.filter(ghl_note_id=ghl_note_id).exists():
         return {
@@ -45,15 +89,18 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
 
     body = (note_body or "").strip() if note_body is not None else ""
     if not body:
-        note_obj, nerr = get_note_by_id(ghl_note_id)
-        if nerr or not note_obj:
-            return {
-                "ok": False,
-                "error": nerr or "Could not load GHL note",
-                "ghl_contact_id": ghl_contact_id,
-                "ghl_note_id": ghl_note_id,
-            }
-        body = note_dict_body(note_obj)
+        if latest_note:
+            body = note_dict_body(latest_note)
+        if not body:
+            note_obj, nerr = get_note_by_id(ghl_note_id)
+            if nerr or not note_obj:
+                return {
+                    "ok": False,
+                    "error": nerr or "Could not load GHL note",
+                    "ghl_contact_id": ghl_contact_id,
+                    "ghl_note_id": ghl_note_id,
+                }
+            body = note_dict_body(note_obj)
     if not body:
         return {
             "ok": False,

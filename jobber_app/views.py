@@ -905,13 +905,13 @@ class GhlContactNoteWebhookView(APIView):
 
         data = _parse_webhook_json_payload(request)
         contact_id, note_id, body = _extract_ghl_note_create_fields(data)
-        if not contact_id or not note_id:
+        if not contact_id:
             logger.warning(
-                "GHL note webhook missing contactId or note id; keys=%s",
+                "GHL note webhook missing contactId; keys=%s",
                 sorted(data.keys()) if isinstance(data, dict) else [],
             )
             return Response(
-                {"error": "contactId and note id (id) required"},
+                {"error": "contactId required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -925,11 +925,11 @@ class GhlContactNoteWebhookView(APIView):
             logger.warning(
                 "GHL note forward failed contactId=%s noteId=%s error=%s",
                 contact_id,
-                note_id,
+                note_id or "(resolved-latest)",
                 result.get("error"),
             )
         return Response(
-            {"received": True, "contactId": str(contact_id), "noteId": str(note_id), "note_forward": result},
+            {"received": True, "contactId": str(contact_id), "noteId": str(note_id or ""), "note_forward": result},
             status=status_code,
         )
 
