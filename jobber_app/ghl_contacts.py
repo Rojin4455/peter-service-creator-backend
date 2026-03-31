@@ -236,7 +236,9 @@ def update_contact_tags(contact_id, tags_list):
 
 
 # -----------------------------------------------------------------------------
-# CRM Notes (contact sidebar “Notes” in GHL UI — LeadConnector /notes API)
+# CRM Notes
+# Prefer documented contacts routes (/contacts/:id/notes),
+# keep /notes/search as fallback for older/workflow-style behavior.
 # -----------------------------------------------------------------------------
 
 
@@ -270,6 +272,22 @@ def search_contact_notes(location_id, contact_id, *, limit=50, offset=0):
     if err:
         return [], err
     return _notes_list_from_response(data), None
+
+
+def list_contact_notes(contact_id, *, limit=100):
+    """
+    GET /contacts/:contactId/notes (documented under contacts.readonly scope).
+    Returns (list of note dicts, error or None).
+    """
+    if not contact_id:
+        return [], "contact_id required"
+    data, err = _request("GET", f"/contacts/{contact_id}/notes")
+    if err:
+        return [], err
+    notes = _notes_list_from_response(data)
+    if limit and isinstance(notes, list):
+        notes = notes[: int(limit)]
+    return notes, None
 
 
 def get_note_by_id(note_id):

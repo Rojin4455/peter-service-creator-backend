@@ -12,6 +12,7 @@ from .ghl_contacts import (
     _location_id,
     get_contact_by_id,
     get_note_by_id,
+    list_contact_notes,
     search_contact_notes,
     ghl_contact_email_and_phone,
     note_dict_body,
@@ -22,14 +23,17 @@ logger = logging.getLogger(__name__)
 
 
 def _latest_ghl_note_for_contact(ghl_contact_id):
-    """Best-effort latest note for a contact via /notes/search."""
+    """Best-effort latest note for a contact via documented contacts notes endpoint."""
     creds = _get_credentials()
     if not creds:
         return None, "GHL not connected"
     location_id = _location_id(creds)
     if not location_id:
         return None, "GHL location id missing"
-    notes, err = search_contact_notes(location_id, ghl_contact_id, limit=10, offset=0)
+    notes, err = list_contact_notes(ghl_contact_id, limit=20)
+    if err or not notes:
+        # Fallback for accounts where /notes/search is available/required.
+        notes, err = search_contact_notes(location_id, ghl_contact_id, limit=20, offset=0)
     if err:
         return None, err
     if not notes:
