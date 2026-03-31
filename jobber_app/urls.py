@@ -16,6 +16,11 @@ urlpatterns = [
         name="ghl-contact-tags-webhook",
     ),
     path(
+        "webhooks/ghl/contact-note/",
+        views.GhlContactNoteWebhookView.as_view(),
+        name="ghl-contact-note-webhook",
+    ),
+    path(
         "clients/sync-tags-to-ghl/",
         views.JobberClientSyncTagsToGhlView.as_view(),
         name="jobber-client-sync-tags-to-ghl",

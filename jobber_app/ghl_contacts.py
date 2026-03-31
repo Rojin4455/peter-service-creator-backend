@@ -233,3 +233,61 @@ def update_contact_tags(contact_id, tags_list):
     if err:
         return False, err
     return True, None
+
+
+# -----------------------------------------------------------------------------
+# CRM Notes (contact sidebar “Notes” in GHL UI — LeadConnector /notes API)
+# -----------------------------------------------------------------------------
+
+
+def _notes_list_from_response(data):
+    """Normalize various response shapes to a list of note dicts."""
+    if not isinstance(data, dict):
+        return []
+    for key in ("notes", "data", "items", "results"):
+        v = data.get(key)
+        if isinstance(v, list):
+            return v
+        if isinstance(v, dict) and isinstance(v.get("notes"), list):
+            return v["notes"]
+    return []
+
+
+def search_contact_notes(location_id, contact_id, *, limit=50, offset=0):
+    """
+    POST /notes/search — list notes for a contact (same API the GHL UI uses).
+    Returns (list of note dicts, error or None).
+    """
+    if not location_id or not contact_id:
+        return [], "location_id and contact_id required"
+    payload = {
+        "locationId": str(location_id).strip(),
+        "contactId": str(contact_id).strip(),
+        "limit": int(limit),
+        "offset": int(offset),
+    }
+    data, err = _request("POST", "/notes/search", json=payload)
+    if err:
+        return [], err
+    return _notes_list_from_response(data), None
+
+
+def get_note_by_id(note_id):
+    """GET /notes/:id — single note detail if supported."""
+    if not note_id:
+        return None, "note_id required"
+    data, err = _request("GET", f"/notes/{note_id}")
+    if err:
+        return None, err
+    if isinstance(data, dict) and isinstance(data.get("note"), dict):
+        return data["note"], None
+    if isinstance(data, dict) and data.get("id"):
+        return data, None
+    return None, "Unexpected GHL note response shape"
+
+
+def note_dict_body(note):
+    """Extract human-readable body from a GHL note object."""
+    if not isinstance(note, dict):
+        return ""
+    return str(note.get("body") or note.get("note") or note.get("message") or "").strip()

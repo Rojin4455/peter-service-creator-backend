@@ -1,5 +1,13 @@
 from django.contrib import admin
-from .models import JobberClientGhlTagSyncState, JobberVisitGhlBlockMap
+from .models import JobberClientGhlTagSyncState, JobberGhlNoteForward, JobberVisitGhlBlockMap
+
+
+@admin.register(JobberGhlNoteForward)
+class JobberGhlNoteForwardAdmin(admin.ModelAdmin):
+    list_display = ("ghl_note_id", "ghl_contact_id", "jobber_client_id", "created_at")
+    search_fields = ("ghl_note_id", "ghl_contact_id", "jobber_client_id")
+    ordering = ("-created_at",)
+    readonly_fields = ("created_at",)
 
 
 @admin.register(JobberClientGhlTagSyncState)

@@ -50,3 +50,21 @@ class JobberClientGhlTagSyncState(models.Model):
 
     def __str__(self):
         return f"{self.jobber_client_id} ↔ {self.ghl_contact_id or '?'}"
+
+
+class JobberGhlNoteForward(models.Model):
+    """
+    One row per GHL CRM note successfully applied to Jobber (idempotency for webhooks/retries).
+    """
+
+    ghl_note_id = models.CharField(max_length=128, unique=True, db_index=True)
+    ghl_contact_id = models.CharField(max_length=128, db_index=True)
+    jobber_client_id = models.CharField(max_length=255, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "jobber_ghl_note_forward"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"GHL note {self.ghl_note_id} → Jobber {self.jobber_client_id}"

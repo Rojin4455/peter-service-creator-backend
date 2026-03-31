@@ -759,3 +759,138 @@ def set_client_tags_by_names(client_id, tag_names):
         msg = "; ".join([e.get("message", str(e)) for e in user_errors])
         return False, msg
     return True, None
+
+
+# -----------------------------------------------------------------------------
+# Client notes (internal notes — sync from GHL CRM notes)
+# ClientNote text field is typically `message` (align with JobCreate notes shape).
+# -----------------------------------------------------------------------------
+
+QUERY_CLIENT_NOTES_MESSAGES = """
+query ClientNotesMessages($id: EncodedId!) {
+  client(id: $id) {
+    id
+    notes(first: 100) {
+      nodes {
+        message
+      }
+    }
+  }
+}
+"""
+
+MUTATION_CLIENT_UPDATE_NOTES = """
+mutation ClientUpdateNotes($input: ClientUpdateInput!) {
+  clientUpdate(input: $input) {
+    client {
+      id
+      notes(first: 5) {
+        nodes {
+          message
+        }
+      }
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def _note_node_text(node):
+    if not node or not isinstance(node, dict):
+        return ""
+    return str(node.get("message") or node.get("body") or node.get("content") or "").strip()
+
+
+def list_client_note_messages(client_id):
+    """
+    Return ordered list of existing client note bodies (for merge before replace).
+    """
+    if not client_id:
+        return [], "client_id is required"
+    data, err = _request(QUERY_CLIENT_NOTES_MESSAGES, {"id": client_id})
+    if err:
+        return [], err
+    client = (data or {}).get("client")
+    if not client:
+        return [], "Client not found"
+    nodes = ((client.get("notes") or {}).get("nodes")) or []
+    out = []
+    for n in nodes:
+        t = _note_node_text(n)
+        if t:
+            out.append(t)
+    return out, None
+
+
+def set_client_note_messages(client_id, messages):
+    """
+    Replace Jobber client notes with the given list (each item becomes one note with `message`).
+    Returns (True, None) or (False, error_message).
+    """
+    if not client_id:
+        return False, "client_id is required"
+    messages = [str(m).strip() for m in (messages or []) if str(m).strip()]
+    if not messages:
+        return False, "Refusing to clear all client notes with empty list"
+    note_inputs = [{"message": m[:15000]} for m in messages]
+    input_obj = {"id": client_id, "notes": note_inputs}
+    data, err = _request(MUTATION_CLIENT_UPDATE_NOTES, {"input": input_obj})
+    if err:
+        input_alt = {"clientId": client_id, "notes": note_inputs}
+        data, err = _request(MUTATION_CLIENT_UPDATE_NOTES, {"input": input_alt})
+    if err:
+        return False, err
+    result = (data or {}).get("clientUpdate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return False, msg
+    return True, None
+
+
+def append_ghl_note_to_jobber_client(client_id, ghl_note_id, note_body, *, max_total_chars=28000):
+    """
+    Append one GHL note as a new Jobber client note, preserving existing notes (read → merge → replace list).
+    Idempotent by scanning for [GHL note_id=...] marker in existing messages.
+
+    Returns (success, error_message_or_None, did_write_to_jobber).
+    """
+    if not client_id:
+        return False, "client_id is required", False
+    gid = str(ghl_note_id or "").strip()
+    body = (note_body or "").strip()
+    if not body:
+        return False, "Empty note body", False
+    marker = f"[GHL note_id={gid}]" if gid else "[GHL note]"
+    existing, err = list_client_note_messages(client_id)
+    if err:
+        return False, err, False
+    if any(marker in (m or "") for m in existing):
+        return True, None, False
+    block = f"{marker}\n{body}".strip()
+    merged = existing + [block]
+    joined = "\n\n---\n\n".join(merged)
+    if len(joined) > max_total_chars:
+        overflow = len(joined) - max_total_chars
+        trimmed = []
+        for i, m in enumerate(merged):
+            if i == len(merged) - 1:
+                trimmed.append(m)
+                continue
+            if overflow <= 0:
+                trimmed.append(m)
+                continue
+            if len(m) <= overflow:
+                overflow -= len(m)
+                continue
+            trimmed.append(m[overflow:])
+            overflow = 0
+        merged = [x for x in trimmed if x.strip()]
+        if not merged:
+            merged = [block[-max_total_chars:]]
+    ok, uerr = set_client_note_messages(client_id, merged)
+    return ok, uerr, bool(ok)

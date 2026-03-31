@@ -19,6 +19,7 @@ from .sync_ghl_calendar import (
     sync_jobber_visit_to_ghl_blocks,
     sync_jobber_visits_to_ghl_blocks,
 )
+from .note_sync import sync_ghl_note_to_jobber
 from .tag_sync import sync_ghl_contact_tags_to_jobber, sync_jobber_client_tags_to_ghl
 
 logger = logging.getLogger(__name__)
@@ -765,6 +766,47 @@ def _can_run_ghl_tag_sync_webhook(request):
     return got == expected
 
 
+def _can_run_ghl_note_sync_webhook(request):
+    """
+    Optional secret for GHL → Jobber note forwarding.
+    Uses GHL_NOTE_SYNC_WEBHOOK_SECRET + X-GHL-Note-Sync-Secret, or falls back to tag sync secret/header.
+    """
+    note_sec = config("GHL_NOTE_SYNC_WEBHOOK_SECRET", default="").strip()
+    tag_sec = config("GHL_TAG_SYNC_WEBHOOK_SECRET", default="").strip()
+    expected = note_sec or tag_sec
+    if not expected:
+        return True
+    got_note = (request.headers.get("X-GHL-Note-Sync-Secret") or "").strip()
+    got_tag = (request.headers.get("X-GHL-Tag-Sync-Secret") or "").strip()
+    return got_note == expected or got_tag == expected
+
+
+def _extract_ghl_note_create_fields(data):
+    """
+    Parse GHL NoteCreate webhook / workflow payload.
+    See: https://marketplace.gohighlevel.com/docs/webhook/NoteCreate
+    """
+    merged = _ghl_webhook_payload_merged(data if isinstance(data, dict) else {})
+    contact_id = merged.get("contactId") or merged.get("contact_id")
+    note_id = merged.get("id") or merged.get("noteId") or merged.get("note_id")
+    body = merged.get("body")
+    c = merged.get("contact")
+    if isinstance(c, dict):
+        contact_id = contact_id or c.get("id") or c.get("contactId")
+    lowered = {str(k).lower(): v for k, v in merged.items()}
+    if not contact_id:
+        contact_id = lowered.get("contactid") or lowered.get("contact_id")
+    if not note_id:
+        note_id = lowered.get("noteid") or lowered.get("note_id")
+    if body is None:
+        body = merged.get("note") or merged.get("message") or merged.get("text")
+    if contact_id is not None:
+        contact_id = str(contact_id).strip()
+    if note_id is not None:
+        note_id = str(note_id).strip()
+    return contact_id or None, note_id or None, body
+
+
 def _ghl_webhook_payload_merged(data):
     """Flatten top-level + optional `body` object from GHL HTTP actions."""
     if not isinstance(data, dict):
@@ -842,6 +884,54 @@ class GhlContactTagsWebhookView(APIView):
                 result.get("error"),
             )
         return Response({"received": True, "contactId": str(contact_id), "tag_sync": result}, status=status_code)
+
+
+class GhlContactNoteWebhookView(APIView):
+    """
+    POST — Forward one GHL CRM contact note to Jobber client notes (internal notes area).
+
+    Configure a GHL workflow on note created (or send native NoteCreate webhook shape):
+      { "type": "NoteCreate", "contactId": "...", "id": "<note id>", "body": "..." }
+
+    Auth: GHL_NOTE_SYNC_WEBHOOK_SECRET + X-GHL-Note-Sync-Secret, or reuse tag sync secret/header.
+    If body is omitted, the server loads the note via GET /notes/:id.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_note_sync_webhook(request):
+            return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        data = _parse_webhook_json_payload(request)
+        contact_id, note_id, body = _extract_ghl_note_create_fields(data)
+        if not contact_id or not note_id:
+            logger.warning(
+                "GHL note webhook missing contactId or note id; keys=%s",
+                sorted(data.keys()) if isinstance(data, dict) else [],
+            )
+            return Response(
+                {"error": "contactId and note id (id) required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = sync_ghl_note_to_jobber(
+            ghl_contact_id=str(contact_id),
+            ghl_note_id=str(note_id),
+            note_body=body,
+        )
+        status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
+        if status_code != status.HTTP_200_OK:
+            logger.warning(
+                "GHL note forward failed contactId=%s noteId=%s error=%s",
+                contact_id,
+                note_id,
+                result.get("error"),
+            )
+        return Response(
+            {"received": True, "contactId": str(contact_id), "noteId": str(note_id), "note_forward": result},
+            status=status_code,
+        )
 
 
 class JobberClientSyncTagsToGhlView(APIView):
