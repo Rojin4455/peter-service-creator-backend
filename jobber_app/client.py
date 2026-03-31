@@ -846,7 +846,7 @@ def create_client_note(client_id, message):
 def append_ghl_note_to_jobber_client(client_id, ghl_note_id, note_body, *, max_total_chars=28000):
     """
     Append one GHL note as a new Jobber client note.
-    Idempotent by scanning for [GHL note_id=...] marker in existing messages.
+    Idempotency is enforced primarily by DB-level dedupe in note_sync.
 
     Returns (success, error_message_or_None, did_write_to_jobber).
     """
@@ -857,11 +857,6 @@ def append_ghl_note_to_jobber_client(client_id, ghl_note_id, note_body, *, max_t
     if not body:
         return False, "Empty note body", False
     marker = f"[GHL note_id={gid}]" if gid else "[GHL note]"
-    existing, err = list_client_note_messages(client_id)
-    if err:
-        return False, err, False
-    if any(marker in (m or "") for m in existing):
-        return True, None, False
     block = f"{marker}\n{body}".strip()
     if len(block) > max_total_chars:
         block = block[-max_total_chars:]
