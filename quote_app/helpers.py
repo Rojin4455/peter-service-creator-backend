@@ -293,18 +293,13 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         # --- Build custom fields payload ---
         # Booking/Quote link
+        booking_url = f"{config('BASE_FRONTEND_URI').rstrip('/')}/booking?submission_id={submission.id}"
         custom_fields = [{
             "id": "vWNjYOQajJAPtx2Hkq2e",
-            "field_value": (
-                f"{config('BASE_FRONTEND_URI')}/booking?submission_id={submission.id}"
-                if not is_submit else
-                f"{config('BASE_FRONTEND_URI')}/quote/details/{submission.id}"
-            )
+            "field_value": booking_url
         }]
 
-        url = f"{config('BASE_FRONTEND_URI')}/booking?submission_id={submission.id}" if not is_submit else f"{config('BASE_FRONTEND_URI')}/quote/details/{submission.id}"
-
-        submission.quote_url=url
+        submission.quote_url = booking_url
         submission.save()
 
 

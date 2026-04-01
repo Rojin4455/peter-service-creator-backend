@@ -2,6 +2,7 @@
 from django.db import models
 from decimal import Decimal
 import uuid
+from decouple import config
 from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService, Coupon
 
 class CustomerSubmission(models.Model):
@@ -120,6 +121,15 @@ class CustomerSubmission(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} - {self.customer_email}"
+
+    def _build_quote_url(self):
+        base_frontend_uri = config("BASE_FRONTEND_URI").rstrip("/")
+        return f"{base_frontend_uri}/booking?submission_id={self.id}"
+
+    def save(self, *args, **kwargs):
+        # Always persist quote_url as booking URL + submission ID, independent of status.
+        self.quote_url = self._build_quote_url()
+        super().save(*args, **kwargs)
 
 
 class SubmissionImage(models.Model):
