@@ -28,6 +28,32 @@ def _normalize_note_id(value):
     return s
 
 
+def _normalize_note_body(value):
+    """
+    Normalize webhook/body payload to plain text.
+    GHL workflow payloads may send body as string, dict, list, or null.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        # Common rich-text shapes from workflow/custom webhook mappers.
+        for k in ("bodyText", "body", "text", "message", "note", "value"):
+            v = value.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return ""
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            s = _normalize_note_body(item)
+            if s:
+                parts.append(s)
+        return "\n".join(parts).strip()
+    return str(value).strip()
+
+
 def _latest_ghl_note_for_contact(ghl_contact_id):
     """Best-effort latest note for a contact via documented contacts notes endpoint."""
     creds = _get_credentials()
@@ -110,7 +136,7 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
             "ghl_note_id": ghl_note_id,
         }
 
-    body = (note_body or "").strip() if note_body is not None else ""
+    body = _normalize_note_body(note_body)
     if not body:
         if latest_note:
             body = note_dict_body(latest_note)
