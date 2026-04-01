@@ -13,7 +13,6 @@ from .ghl_contacts import (
     get_contact_by_id,
     get_note_by_id,
     list_contact_notes,
-    search_contact_notes,
     ghl_contact_email_and_phone,
     note_dict_body,
 )
@@ -31,11 +30,8 @@ def _latest_ghl_note_for_contact(ghl_contact_id):
     if not location_id:
         return None, "GHL location id missing"
     notes, err = list_contact_notes(ghl_contact_id, limit=20)
-    if err or not notes:
-        # Fallback for accounts where /notes/search is available/required.
-        notes, err = search_contact_notes(location_id, ghl_contact_id, limit=20, offset=0)
     if err:
-        return None, err
+        return None, f"list_contact_notes_failed: {err}"
     if not notes:
         return None, "No GHL notes found for this contact"
 
@@ -100,7 +96,7 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
             if nerr or not note_obj:
                 return {
                     "ok": False,
-                    "error": nerr or "Could not load GHL note",
+                    "error": f"get_note_by_id_failed: {nerr or 'Could not load GHL note'}",
                     "ghl_contact_id": ghl_contact_id,
                     "ghl_note_id": ghl_note_id,
                 }
@@ -117,7 +113,7 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
     if cerr or not contact:
         return {
             "ok": False,
-            "error": cerr or "GHL contact not found",
+            "error": f"get_contact_by_id_failed: {cerr or 'GHL contact not found'}",
             "ghl_contact_id": ghl_contact_id,
             "ghl_note_id": ghl_note_id,
         }
