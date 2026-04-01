@@ -807,6 +807,13 @@ def _extract_ghl_note_create_fields(data):
     return contact_id or None, note_id or None, body
 
 
+def _normalize_optional_note_id(note_id):
+    s = str(note_id or "").strip()
+    if s.lower() in ("", "none", "null", "undefined", "nan"):
+        return ""
+    return s
+
+
 def _ghl_webhook_payload_merged(data):
     """Flatten top-level + optional `body` object from GHL HTTP actions."""
     if not isinstance(data, dict):
@@ -915,9 +922,10 @@ class GhlContactNoteWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        safe_note_id = _normalize_optional_note_id(note_id)
         result = sync_ghl_note_to_jobber(
             ghl_contact_id=str(contact_id),
-            ghl_note_id=str(note_id),
+            ghl_note_id=safe_note_id,
             note_body=body,
         )
         status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
@@ -925,11 +933,11 @@ class GhlContactNoteWebhookView(APIView):
             logger.warning(
                 "GHL note forward failed contactId=%s noteId=%s error=%s",
                 contact_id,
-                note_id or "(resolved-latest)",
+                safe_note_id or "(resolved-latest)",
                 result.get("error"),
             )
         return Response(
-            {"received": True, "contactId": str(contact_id), "noteId": str(note_id or ""), "note_forward": result},
+            {"received": True, "contactId": str(contact_id), "noteId": str(safe_note_id), "note_forward": result},
             status=status_code,
         )
 

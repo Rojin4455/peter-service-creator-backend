@@ -21,6 +21,13 @@ from .models import JobberGhlNoteForward
 logger = logging.getLogger(__name__)
 
 
+def _normalize_note_id(value):
+    s = str(value or "").strip()
+    if s.lower() in ("", "none", "null", "undefined", "nan"):
+        return ""
+    return s
+
+
 def _latest_ghl_note_for_contact(ghl_contact_id):
     """Best-effort latest note for a contact via documented contacts notes endpoint."""
     creds = _get_credentials()
@@ -48,7 +55,7 @@ def _latest_ghl_note_for_contact(ghl_contact_id):
         )
 
     notes_sorted = sorted(notes, key=_sort_key, reverse=True)
-    return notes_sorted[0], None
+    return notes_sorted, None
 
 
 def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
@@ -60,25 +67,41 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
     Returns dict: ok, skipped, reason?, error?, ghl_contact_id?, ghl_note_id?, jobber_client_id?, written?
     """
     ghl_contact_id = str(ghl_contact_id or "").strip()
-    ghl_note_id = str(ghl_note_id or "").strip()
+    ghl_note_id = _normalize_note_id(ghl_note_id)
 
     if not ghl_contact_id:
         return {"ok": False, "error": "contactId required"}
     latest_note = None
+    notes_sorted = []
     if not ghl_note_id:
-        latest_note, lerr = _latest_ghl_note_for_contact(ghl_contact_id)
-        if lerr or not latest_note:
+        notes_sorted, lerr = _latest_ghl_note_for_contact(ghl_contact_id)
+        if lerr or not notes_sorted:
             return {"ok": False, "error": lerr or "Could not resolve latest note", "ghl_contact_id": ghl_contact_id}
-        ghl_note_id = str(
-            latest_note.get("id")
-            or latest_note.get("noteId")
-            or latest_note.get("note_id")
-            or ""
-        ).strip()
-        if not ghl_note_id:
-            return {"ok": False, "error": "Latest GHL note has no id", "ghl_contact_id": ghl_contact_id}
+        # Pick newest note with a valid id that is not already synced.
+        chosen = None
+        for n in notes_sorted:
+            nid = _normalize_note_id(
+                (n or {}).get("id")
+                or (n or {}).get("noteId")
+                or (n or {}).get("note_id")
+            )
+            if not nid:
+                continue
+            if JobberGhlNoteForward.objects.filter(ghl_note_id=nid).exists():
+                continue
+            chosen = n
+            ghl_note_id = nid
+            break
+        if not chosen:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "no_new_unsynced_note_found",
+                "ghl_contact_id": ghl_contact_id,
+            }
+        latest_note = chosen
 
-    if JobberGhlNoteForward.objects.filter(ghl_note_id=ghl_note_id).exists():
+    if ghl_note_id and JobberGhlNoteForward.objects.filter(ghl_note_id=ghl_note_id).exists():
         return {
             "ok": True,
             "skipped": True,
