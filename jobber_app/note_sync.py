@@ -96,7 +96,7 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
         if latest_note:
             body = note_dict_body(latest_note)
         if not body:
-            note_obj, nerr = get_note_by_id(ghl_note_id)
+            note_obj, nerr = get_note_by_id(ghl_note_id, contact_id=ghl_contact_id)
             if nerr or not note_obj:
                 return {
                     "ok": False,

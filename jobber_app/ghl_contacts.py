@@ -290,18 +290,33 @@ def list_contact_notes(contact_id, *, limit=100):
     return notes, None
 
 
-def get_note_by_id(note_id):
-    """GET /notes/:id — single note detail if supported."""
+def get_note_by_id(note_id, contact_id=None):
+    """
+    GET note detail.
+    Prefer documented contact-scoped route when contact_id is known:
+      GET /contacts/:contactId/notes/:id
+    Fallback:
+      GET /notes/:id
+    """
     if not note_id:
         return None, "note_id required"
-    data, err = _request("GET", f"/notes/{note_id}")
-    if err:
-        return None, err
-    if isinstance(data, dict) and isinstance(data.get("note"), dict):
-        return data["note"], None
-    if isinstance(data, dict) and data.get("id"):
-        return data, None
-    return None, "Unexpected GHL note response shape"
+
+    paths = []
+    if contact_id:
+        paths.append(f"/contacts/{contact_id}/notes/{note_id}")
+    paths.append(f"/notes/{note_id}")
+
+    last_err = None
+    for p in paths:
+        data, err = _request("GET", p)
+        if err:
+            last_err = err
+            continue
+        if isinstance(data, dict) and isinstance(data.get("note"), dict):
+            return data["note"], None
+        if isinstance(data, dict) and data.get("id"):
+            return data, None
+    return None, last_err or "Unexpected GHL note response shape"
 
 
 def note_dict_body(note):
