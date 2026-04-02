@@ -3,8 +3,9 @@ Basic test endpoints for Jobber integration.
 """
 import json
 import logging
+import re
+import uuid
 from datetime import timedelta
-
 from decouple import config
 from django.utils import timezone
 from rest_framework import status
@@ -12,7 +13,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
+from quote_app.models import CustomerSubmission
+
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
+from .models import GhlAppointmentJobberJobMap
 from .sync_ghl_calendar import (
     delete_jobber_visit_from_ghl_blocks,
     sync_jobber_job_to_ghl_blocks,
@@ -387,6 +391,490 @@ def _normalize_booking_services(data):
     return service_type, line_items, None
 
 
+def _booking_confirm_payload_dict(raw):
+    """Normalize DRF Request.data / QueryDict into a plain dict for execute_booking_confirm."""
+    if raw is None:
+        return {}
+    if hasattr(raw, "dict"):
+        try:
+            return dict(raw.dict())
+        except Exception:
+            pass
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        return dict(raw)
+    except Exception:
+        return {}
+
+
+def execute_booking_confirm(data):
+    """
+    Find or create Jobber client → resolve or create property → create job.
+    `data` uses the same shape as BookingConfirmView POST JSON.
+
+    Returns:
+        (result_dict, None) on success.
+        (None, Response) on failure (same status codes as the HTTP API).
+    """
+    if not isinstance(data, dict):
+        data = {}
+    first_name = (data.get("first_name") or "").strip()
+    last_name = (data.get("last_name") or "").strip()
+    email = (data.get("email") or "").strip() or None
+    phone = data.get("phone")
+    if phone is not None:
+        phone = str(phone).strip() or None
+    street1 = (data.get("street1") or data.get("service_address") or "").strip()
+    city = (data.get("city") or "").strip()
+    province = (data.get("province") or data.get("state") or "").strip()
+    postal_code = (data.get("postal_code") or data.get("zip_code") or "").strip()
+    street2 = (data.get("street2") or "").strip() or None
+    scheduled_start_iso = _parse_booking_datetime(
+        data.get("selected_date"),
+        data.get("selected_time"),
+        data.get("scheduled_start_iso"),
+    )
+    if not first_name or not last_name:
+        return None, Response(
+            {"error": "first_name and last_name are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not email and not phone:
+        return None, Response(
+            {"error": "At least one of email or phone is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    job_title, line_items, norm_err = _normalize_booking_services(data)
+    if norm_err:
+        return None, Response({"error": norm_err}, status=status.HTTP_400_BAD_REQUEST)
+    if not line_items or not job_title:
+        return None, Response(
+            {
+                "error": "Provide service_type (single), service_types (array of strings), or services (array of objects with per-line pricing).",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    has_structured = isinstance(data.get("services"), list) and len(data.get("services") or []) > 0
+    has_multi_types = isinstance(data.get("service_types"), list) and len(data.get("service_types") or []) > 0
+    if not has_structured and not has_multi_types:
+        package_title = (data.get("package_title") or data.get("line_item_name") or "").strip()
+        if not package_title:
+            return None, Response(
+                {"error": "package_title is required (e.g. Basic Package) when using single service_type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    search_term = email or phone
+    nodes, _, err = search_clients(search_term, first=5)
+    if err:
+        return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+    client_id = None
+    client_created = False
+    if nodes:
+        client_id = nodes[0].get("id")
+    if not client_id:
+        client, err = create_client(first_name, last_name, email=email, phone=phone)
+        if err:
+            return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        client_id = client.get("id")
+        client_created = True
+
+    prop_id, _, err = get_client_properties(client_id)
+    if err:
+        return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+    if not prop_id:
+        if not street1 or not city or not province or not postal_code:
+            return None, Response(
+                {"error": "Client has no property. Provide street1, city, province, postal_code to create one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        prop, err = create_property_for_client(
+            client_id=client_id,
+            street1=street1,
+            city=city,
+            province=province,
+            postal_code=postal_code,
+            street2=street2,
+        )
+        if err:
+            return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        prop_id = prop.get("id")
+
+    job_notes = _build_booking_job_notes(data)
+    job, err = create_job(
+        property_id=prop_id,
+        title=job_title,
+        job_notes=job_notes,
+        scheduled_start_iso=scheduled_start_iso,
+        line_items=line_items,
+    )
+    if err:
+        return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+
+    return (
+        {
+            "client_id": client_id,
+            "client_created": client_created,
+            "property_id": prop_id,
+            "job": job,
+        },
+        None,
+    )
+
+
+_SUBMISSION_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+
+def _extract_submission_uuid_from_quote_url(url):
+    if not url:
+        return None
+    m = _SUBMISSION_UUID_RE.search(str(url))
+    return m.group(0) if m else None
+
+
+def _merge_ghl_booking_payload_top_level(payload):
+    """Merge customData into a flat dict for field lookup (quote URL, form keys)."""
+    merged = _ghl_webhook_payload_merged(payload if isinstance(payload, dict) else {})
+    cd = payload.get("customData") if isinstance(payload, dict) else None
+    if isinstance(cd, dict):
+        for k, v in cd.items():
+            if k not in merged or merged.get(k) in ("", None):
+                merged[k] = v
+    return merged
+
+
+def _quote_submission_url_from_merged(merged):
+    for key in (
+        "Quote Submission Url",
+        "Quote Submission URL",
+        "quote_submission_url",
+        "QuoteSubmissionUrl",
+    ):
+        v = merged.get(key)
+        if v and str(v).strip().lower().startswith("http"):
+            return str(v).strip()
+    return None
+
+
+def _parse_multi_value_field(val):
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(x).strip() for x in val if str(x).strip()]
+    s = str(val).strip()
+    if not s:
+        return []
+    for sep in (",", ";", "|"):
+        if sep in s:
+            return [x.strip() for x in s.split(sep) if x.strip()]
+    return [s]
+
+
+def _package_feature_description(package):
+    if not package:
+        return ""
+    lines = []
+    qs = package.package_features.select_related("feature").filter(is_included=True).order_by("feature__name")
+    for pf in qs:
+        nm = (pf.feature.name or "").strip()
+        if nm:
+            lines.append(nm)
+    if lines:
+        return "; ".join(lines)
+    svc = getattr(package, "service", None)
+    return (getattr(svc, "description", None) or "").strip()
+
+
+def _job_detail_dict_from_submission_and_ghl(submission, merged):
+    ad = submission.additional_data if isinstance(submission.additional_data, dict) else {}
+
+    def pick(*keys):
+        for k in keys:
+            v = merged.get(k)
+            if v not in (None, "", []):
+                return v
+        for k in keys:
+            v = ad.get(k)
+            if v not in (None, "", []):
+                return v
+        return None
+
+    bedrooms = pick("# of Bedrooms to be Cleaned", "bedrooms", "Bedrooms")
+    bathrooms = pick("# of Bathrooms to be Cleaned", "bathrooms", "Bathrooms")
+    sqft = pick("House Size", "square_footage", "Square footage")
+    if submission.size_range:
+        sr = submission.size_range
+        if not sqft:
+            mn = getattr(sr, "min_sqft", None)
+            mx = getattr(sr, "max_sqft", None)
+            if mn is not None:
+                if mx:
+                    sqft = f"{mn}–{mx} sq ft"
+                else:
+                    sqft = f"{mn}+ sq ft"
+    if submission.actual_sqft and not sqft:
+        sqft = str(submission.actual_sqft)
+    condition = pick(
+        "Clutter Scale: Rate the Current Clutter Level of Residence",
+        "Cleanliness Scale: Rate the Current Cleanliness Level of Residence",
+        "condition",
+    )
+    pets = pick("Special Details (Which apply)", "pets", "Pets")
+    add_ons = pick("Additional Services", "add_ons")
+    if submission.submission_addons.exists():
+        addon_bits = [
+            f"{a.addon.name} x{a.quantity}"
+            for a in submission.submission_addons.select_related("addon").all()
+        ]
+        if addon_bits:
+            existing = (add_ons or "").strip()
+            merged_addons = "; ".join(addon_bits)
+            add_ons = f"{existing}; {merged_addons}".strip("; ") if existing else merged_addons
+    special = pick(
+        "Notes",
+        "Please include any additional information or questions you may have.",
+        "special_instructions",
+    )
+    entry = pick("Entry instructions", "entry_instructions")
+
+    out = {
+        "bedrooms": bedrooms,
+        "bathrooms": bathrooms,
+        "square_footage": sqft,
+        "condition": condition,
+        "pets": pets,
+        "add_ons": add_ons,
+        "special_instructions": special,
+        "entry_instructions": entry,
+    }
+    try:
+        pfloat = float(submission.final_total)
+    except (TypeError, ValueError):
+        pfloat = None
+    service_guess = (pick("Type of Service") or "") or ""
+    if not service_guess and submission.customerserviceselection_set.exists():
+        service_guess = submission.customerserviceselection_set.select_related("service").first().service.name
+    if pfloat and pfloat > 0:
+        low, high, _slot = _compute_labor_and_slot(pfloat, service_type=service_guess, team_size=2)
+        if low is not None and high is not None:
+            out["estimated_labor_hours"] = f"{low}–{high} (team slot from booking rules)"
+    return {k: v for k, v in out.items() if v not in (None, "", [])}
+
+
+def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
+    """
+    Build execute_booking_confirm() input from CustomerSubmission + GHL workflow fields.
+    Contact/address: prefer GHL webhook (post-booking) then submission.
+    """
+    m = merged
+    first_name = (m.get("first_name") or submission.first_name or "").strip()
+    last_name = (m.get("last_name") or submission.last_name or "").strip()
+    email = (m.get("email") or submission.customer_email or "").strip() or None
+    phone_raw = m.get("phone") if m.get("phone") not in (None, "") else submission.customer_phone
+    phone = str(phone_raw).strip() if phone_raw else None
+
+    street1 = (submission.street_address or m.get("address1") or m.get("full_address") or "").strip()
+    city = ""
+    if submission.location_id:
+        loc = submission.location
+        city = (loc.name or "").strip()
+    if not city:
+        city = (m.get("city") or "").strip()
+    if not city:
+        city = (config("JOBBER_DEFAULT_SERVICE_CITY", default="") or "").strip()
+    province = (config("JOBBER_DEFAULT_SERVICE_PROVINCE", default="QC") or "QC").strip()
+    postal_code = (submission.postal_code or m.get("postalCode") or m.get("postal_code") or "").strip()
+    fallback_pc = (config("JOBBER_FALLBACK_POSTAL_CODE", default="") or "").strip()
+    if not postal_code and fallback_pc:
+        postal_code = fallback_pc
+
+    start_iso = None
+    if isinstance(calendar_obj, dict):
+        start_iso = (calendar_obj.get("startTime") or calendar_obj.get("start_time") or "").strip() or None
+    if not start_iso:
+        start_iso = (m.get("scheduled_start_iso") or "").strip() or None
+
+    selections = list(
+        submission.customerserviceselection_set.select_related("service", "selected_package").prefetch_related(
+            "selected_package__package_features__feature"
+        ).all()
+    )
+    services_rows = []
+    for sel in selections:
+        pkg = sel.selected_package
+        if not pkg:
+            continue
+        desc = _package_feature_description(pkg)
+        try:
+            line_price = float(sel.final_total_price)
+        except (TypeError, ValueError):
+            continue
+        services_rows.append(
+            {
+                "service_type": sel.service.name,
+                "package_title": pkg.name,
+                "package_description": desc,
+                "line_item_price": line_price,
+            }
+        )
+
+    if not services_rows:
+        types = [s.service.name for s in selections if s.service_id]
+        pkg_name = ""
+        if selections:
+            sp = selections[0].selected_package
+            pkg_name = sp.name if sp else ""
+        try:
+            total = float(submission.final_total)
+        except (TypeError, ValueError):
+            total = None
+        if types and total is not None and total > 0:
+            data = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "phone": phone,
+                "street1": street1,
+                "city": city,
+                "province": province,
+                "postal_code": postal_code,
+                "scheduled_start_iso": start_iso,
+                "service_types": types,
+                "package_title": pkg_name or "Approved services",
+                "package_description": "",
+                "approved_price": total,
+            }
+            data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
+            return data
+        return None
+
+    if len(services_rows) == 1:
+        row = services_rows[0]
+        data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email,
+            "phone": phone,
+            "street1": street1,
+            "city": city,
+            "province": province,
+            "postal_code": postal_code,
+            "scheduled_start_iso": start_iso,
+            "service_type": row["service_type"],
+            "package_title": row["package_title"],
+            "package_description": row["package_description"],
+            "approved_price": row["line_item_price"],
+        }
+        data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
+        return data
+
+    data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "phone": phone,
+        "street1": street1,
+        "city": city,
+        "province": province,
+        "postal_code": postal_code,
+        "scheduled_start_iso": start_iso,
+        "services": services_rows,
+    }
+    data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
+    return data
+
+
+def _booking_confirm_dict_from_ghl_only(merged, calendar_obj):
+    """Fallback when no CustomerSubmission is found: map GHL custom fields only."""
+    first_name = (merged.get("first_name") or "").strip()
+    last_name = (merged.get("last_name") or "").strip()
+    email = (merged.get("email") or "").strip() or None
+    phone = merged.get("phone")
+    if phone is not None:
+        phone = str(phone).strip() or None
+    street1 = (merged.get("address1") or merged.get("full_address") or "").strip()
+    city = (merged.get("city") or "").strip()
+    province = (
+        merged.get("state")
+        or merged.get("province")
+        or config("JOBBER_DEFAULT_SERVICE_PROVINCE", default="QC")
+        or "QC"
+    ).strip()
+    postal_code = (merged.get("postalCode") or merged.get("postal_code") or "").strip()
+    fallback_pc = (config("JOBBER_FALLBACK_POSTAL_CODE", default="") or "").strip()
+    if not postal_code and fallback_pc:
+        postal_code = fallback_pc
+
+    start_iso = None
+    if isinstance(calendar_obj, dict):
+        start_iso = (calendar_obj.get("startTime") or "").strip() or None
+
+    types = _parse_multi_value_field(merged.get("Selected Services"))
+    if not types:
+        ts = (merged.get("Type of Service") or "").strip()
+        if ts:
+            types = [ts]
+    if not types:
+        types = ["Cleaning Service"]
+
+    price = merged.get("Quote Value")
+    if price in (None, ""):
+        price = merged.get("Total Price")
+    if price in (None, ""):
+        price = merged.get("final_total")
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        price_f = None
+    if price_f is None or price_f <= 0:
+        return None
+
+    pkg = (merged.get("Which Cleaning Package") or merged.get("package_title") or "Package").strip()
+    desc = (merged.get("Quoted Services") or merged.get("package_description") or "").strip()
+
+    data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "phone": phone,
+        "street1": street1,
+        "city": city,
+        "province": province,
+        "postal_code": postal_code,
+        "scheduled_start_iso": start_iso,
+        "service_types": types,
+        "package_title": pkg,
+        "package_description": desc,
+        "approved_price": price_f,
+        "bedrooms": merged.get("# of Bedrooms to be Cleaned"),
+        "bathrooms": merged.get("# of Bathrooms to be Cleaned"),
+        "square_footage": merged.get("House Size"),
+        "condition": merged.get("Clutter Scale: Rate the Current Clutter Level of Residence"),
+        "pets": merged.get("Special Details (Which apply)"),
+        "add_ons": merged.get("Additional Services"),
+        "special_instructions": merged.get("Notes")
+        or merged.get("Please include any additional information or questions you may have."),
+    }
+    low, high, _ = _compute_labor_and_slot(price_f, service_type=types[0] if types else "", team_size=2)
+    if low is not None and high is not None:
+        data["estimated_labor_hours"] = f"{low}–{high}"
+    return data
+
+
+def _can_run_ghl_booking_webhook(request):
+    expected = config("GHL_BOOKING_WEBHOOK_SECRET", default="").strip()
+    if not expected:
+        return True
+    got = (request.headers.get("X-GHL-Booking-Webhook-Secret") or "").strip()
+    return got == expected
+
+
 class BookingSlotInfoView(APIView):
     """
     GET /api/jobber/booking/slot-info/?price=525&service_type=Residential First Clean&team_size=2
@@ -455,121 +943,102 @@ class BookingConfirmView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        data = request.data
-        # Client
-        first_name = (data.get("first_name") or "").strip()
-        last_name = (data.get("last_name") or "").strip()
-        email = (data.get("email") or "").strip() or None
-        phone = data.get("phone")
-        if phone is not None:
-            phone = str(phone).strip() or None
-        # Address (for property create when needed)
-        street1 = (data.get("street1") or data.get("service_address") or "").strip()
-        city = (data.get("city") or "").strip()
-        province = (data.get("province") or data.get("state") or "").strip()
-        postal_code = (data.get("postal_code") or data.get("zip_code") or "").strip()
-        street2 = (data.get("street2") or "").strip() or None
-        add_ons = (data.get("add_ons") or "").strip() or None
-        # Booking time
-        scheduled_start_iso = _parse_booking_datetime(
-            data.get("selected_date"),
-            data.get("selected_time"),
-            data.get("scheduled_start_iso"),
-        )
-        # Validation
-        if not first_name or not last_name:
-            return Response(
-                {"error": "first_name and last_name are required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not email and not phone:
-            return Response(
-                {"error": "At least one of email or phone is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        payload = _booking_confirm_payload_dict(request.data)
+        result, err_resp = execute_booking_confirm(payload)
+        if err_resp is not None:
+            return err_resp
+        return Response(result, status=status.HTTP_201_CREATED)
 
-        job_title, line_items, norm_err = _normalize_booking_services(data)
-        if norm_err:
-            return Response({"error": norm_err}, status=status.HTTP_400_BAD_REQUEST)
-        if not line_items or not job_title:
+
+class GhlBookingConfirmedWebhookView(APIView):
+    """
+    POST — GoHighLevel workflow webhook after a contact books (e.g. “Customer Booked Appointment”).
+
+    Expects the standard workflow JSON (contact fields, `calendar` with startTime / appointmentId,
+    optional `customData` with “Quote Submission Url” pointing at …/quote/details/<uuid>).
+
+    Resolves `CustomerSubmission` by UUID from that URL when possible; otherwise maps GHL custom
+    fields (Quote Value, Selected Services, Which Cleaning Package, etc.).
+
+    Auth (recommended): set GHL_BOOKING_WEBHOOK_SECRET and send header X-GHL-Booking-Webhook-Secret.
+
+    Idempotency: same `calendar.appointmentId` only creates one Jobber job (stored in DB).
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_booking_webhook(request):
+            logger.warning("GHL booking webhook forbidden: missing/invalid secret header")
+            return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = _parse_webhook_json_payload(request)
+        merged = _merge_ghl_booking_payload_top_level(payload)
+        cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else {}
+
+        appt_id = ""
+        if isinstance(cal, dict):
+            appt_id = str(cal.get("appointmentId") or cal.get("id") or "").strip()
+        if appt_id:
+            existing = GhlAppointmentJobberJobMap.objects.filter(ghl_appointment_id=appt_id).first()
+            if existing:
+                return Response(
+                    {
+                        "received": True,
+                        "duplicate": True,
+                        "ghl_appointment_id": appt_id,
+                        "jobber_job_id": existing.jobber_job_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        quote_url = _quote_submission_url_from_merged(merged)
+        sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
+        submission = None
+        if sub_uuid:
+            try:
+                uid = uuid.UUID(str(sub_uuid))
+            except ValueError:
+                uid = None
+            if uid:
+                submission = (
+                    CustomerSubmission.objects.select_related("location", "size_range")
+                    .filter(id=uid)
+                    .first()
+                )
+
+        if submission is not None:
+            booking_data = _booking_confirm_dict_from_submission(submission, merged, cal)
+        else:
+            booking_data = _booking_confirm_dict_from_ghl_only(merged, cal)
+
+        if not booking_data:
+            logger.warning(
+                "GHL booking webhook: could not build booking payload (missing submission and GHL fields). keys=%s",
+                sorted(merged.keys())[:40] if isinstance(merged, dict) else [],
+            )
             return Response(
                 {
-                    "error": "Provide service_type (single), service_types (array of strings), or services (array of objects with per-line pricing).",
+                    "error": "Could not build booking: provide a quote URL with submission UUID in customData, "
+                    "or GHL fields Quote Value / Selected Services / contact details.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # package_title required for legacy single-service UX; for multi service_types allow omit if only types sent
-        has_structured = isinstance(data.get("services"), list) and len(data.get("services") or []) > 0
-        has_multi_types = isinstance(data.get("service_types"), list) and len(data.get("service_types") or []) > 0
-        if not has_structured and not has_multi_types:
-            package_title = (data.get("package_title") or data.get("line_item_name") or "").strip()
-            if not package_title:
-                return Response(
-                    {"error": "package_title is required (e.g. Basic Package) when using single service_type"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        result, err_resp = execute_booking_confirm(booking_data)
+        if err_resp is not None:
+            return err_resp
 
-        # 1) Find or create client
-        search_term = email or phone
-        nodes, _, err = search_clients(search_term, first=5)
-        if err:
-            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-        client_id = None
-        client_created = False
-        if nodes:
-            # Use first match (by email or phone)
-            client_id = nodes[0].get("id")
-        if not client_id:
-            client, err = create_client(first_name, last_name, email=email, phone=phone)
-            if err:
-                return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-            client_id = client.get("id")
-            client_created = True
-
-        # 2) Resolve or create property (need address for create)
-        prop_id, _, err = get_client_properties(client_id)
-        if err:
-            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-        if not prop_id:
-            if not street1 or not city or not province or not postal_code:
-                return Response(
-                    {"error": "Client has no property. Provide street1, city, province, postal_code to create one."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            prop, err = create_property_for_client(
-                client_id=client_id,
-                street1=street1,
-                city=city,
-                province=province,
-                postal_code=postal_code,
-                street2=street2,
+        job = (result or {}).get("job") or {}
+        jobber_id = job.get("id")
+        if appt_id and jobber_id:
+            sid = submission.id if submission is not None else None
+            GhlAppointmentJobberJobMap.objects.update_or_create(
+                ghl_appointment_id=appt_id,
+                defaults={"jobber_job_id": str(jobber_id), "submission_id": sid},
             )
-            if err:
-                return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-            prop_id = prop.get("id")
 
-        # 3) Build job notes and create job
-        job_notes = _build_booking_job_notes(data)
-        job, err = create_job(
-            property_id=prop_id,
-            title=job_title,
-            job_notes=job_notes,
-            scheduled_start_iso=scheduled_start_iso,
-            line_items=line_items,
-        )
-        if err:
-            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-
-        return Response(
-            {
-                "client_id": client_id,
-                "client_created": client_created,
-                "property_id": prop_id,
-                "job": job,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        return Response({"received": True, **(result or {})}, status=status.HTTP_201_CREATED)
 
 
 def _can_run_ghl_calendar_sync(request):

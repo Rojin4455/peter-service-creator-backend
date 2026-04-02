@@ -1,5 +1,10 @@
 from django.contrib import admin
-from .models import JobberClientGhlTagSyncState, JobberGhlNoteForward, JobberVisitGhlBlockMap
+from .models import (
+    GhlAppointmentJobberJobMap,
+    JobberClientGhlTagSyncState,
+    JobberGhlNoteForward,
+    JobberVisitGhlBlockMap,
+)
 
 
 @admin.register(JobberGhlNoteForward)
@@ -22,6 +27,14 @@ class JobberClientGhlTagSyncStateAdmin(admin.ModelAdmin):
     list_filter = ("last_sync_source",)
     ordering = ("-updated_at",)
     readonly_fields = ("updated_at",)
+
+
+@admin.register(GhlAppointmentJobberJobMap)
+class GhlAppointmentJobberJobMapAdmin(admin.ModelAdmin):
+    list_display = ("ghl_appointment_id", "jobber_job_id", "submission_id", "created_at")
+    search_fields = ("ghl_appointment_id", "jobber_job_id", "submission_id")
+    ordering = ("-created_at",)
+    readonly_fields = ("created_at",)
 
 
 @admin.register(JobberVisitGhlBlockMap)
