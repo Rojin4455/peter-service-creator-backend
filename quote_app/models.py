@@ -123,8 +123,11 @@ class CustomerSubmission(models.Model):
         return f"{self.first_name} {self.last_name} - {self.customer_email}"
 
     def _build_quote_url(self):
-        base_frontend_uri = config("BASE_FRONTEND_URI").rstrip("/")
-        return f"{base_frontend_uri}/booking?submission_id={self.id}"
+        public_quote_base_url = config(
+            "QUOTE_PUBLIC_BASE_URL",
+            default="https://site.cleanonthego.com",
+        ).rstrip("/")
+        return f"{public_quote_base_url}/booking?submission_id={self.id}"
 
     def save(self, *args, **kwargs):
         # Always persist quote_url as booking URL + submission ID, independent of status.

@@ -293,7 +293,11 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         # --- Build custom fields payload ---
         # Booking/Quote link
-        booking_url = f"{config('BASE_FRONTEND_URI').rstrip('/')}/booking?submission_id={submission.id}"
+        public_quote_base_url = config(
+            "QUOTE_PUBLIC_BASE_URL",
+            default="https://site.cleanonthego.com",
+        ).rstrip("/")
+        booking_url = f"{public_quote_base_url}/booking?submission_id={submission.id}"
         custom_fields = [{
             "id": "vWNjYOQajJAPtx2Hkq2e",
             "field_value": booking_url
