@@ -582,10 +582,62 @@ _SUBMISSION_UUID_RE = re.compile(
 
 
 def _extract_submission_uuid_from_quote_url(url):
+    """
+    Prefer explicit quote/booking URL shapes so we never grab the wrong UUID if the string
+    contains more than one UUID.
+    """
     if not url:
         return None
-    m = _SUBMISSION_UUID_RE.search(str(url))
+    s = str(url).strip()
+    m = re.search(r"/quote/details/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", s, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(
+        r"submission[_-]?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        s,
+        re.I,
+    )
+    if m:
+        return m.group(1)
+    m = _SUBMISSION_UUID_RE.search(s)
     return m.group(0) if m else None
+
+
+_QUOTE_SUBMISSION_URL_KEYS = (
+    "Quote Submission Url",
+    "Quote Submission URL",
+    "quote_submission_url",
+    "QuoteSubmissionUrl",
+    "Quote Details Url",
+    "Quote Details URL",
+    "quote_details_url",
+)
+
+
+def _first_http_quote_url_from_dict(d):
+    if not isinstance(d, dict):
+        return None
+    for key in _QUOTE_SUBMISSION_URL_KEYS:
+        v = d.get(key)
+        if v and str(v).strip().lower().startswith("http"):
+            return str(v).strip()
+    return None
+
+
+def _http_quote_url_from_dict_values(d):
+    """Any value that looks like a quote/booking URL (handles odd GHL customData keys)."""
+    if not isinstance(d, dict):
+        return None
+    for v in d.values():
+        if not isinstance(v, str):
+            continue
+        s = v.strip()
+        if not s.lower().startswith("http"):
+            continue
+        low = s.lower()
+        if "quote/details/" in low or "submission_id=" in low or "/booking?" in low:
+            return s
+    return None
 
 
 def _merge_ghl_booking_payload_top_level(payload):
@@ -599,17 +651,33 @@ def _merge_ghl_booking_payload_top_level(payload):
     return merged
 
 
-def _quote_submission_url_from_merged(merged):
-    for key in (
-        "Quote Submission Url",
-        "Quote Submission URL",
-        "quote_submission_url",
-        "QuoteSubmissionUrl",
-    ):
-        v = merged.get(key)
-        if v and str(v).strip().lower().startswith("http"):
-            return str(v).strip()
+def _quote_submission_url_from_payload(payload):
+    """
+    URL used to resolve CustomerSubmission for the booking.
+
+    **customData first** — workflow webhook fields are usually correct for *this* booking.
+    Contact/top-level fields often still hold an older `quote_submission_url` from a previous
+    quote; our old merge order let that stale value win over customData.
+    """
+    if not isinstance(payload, dict):
+        return None
+    cd = payload.get("customData")
+    url = _first_http_quote_url_from_dict(cd)
+    if url:
+        return url
+    url = _http_quote_url_from_dict_values(cd)
+    if url:
+        return url
+    merged_top = _ghl_webhook_payload_merged(payload)
+    url = _first_http_quote_url_from_dict(merged_top)
+    if url:
+        return url
     return None
+
+
+def _quote_submission_url_from_merged(merged):
+    """Legacy helper: quote URL from an already-merged dict only."""
+    return _first_http_quote_url_from_dict(merged if isinstance(merged, dict) else {})
 
 
 def _parse_multi_value_field(val):
@@ -1007,6 +1075,9 @@ class GhlBookingConfirmedWebhookView(APIView):
     Expects the standard workflow JSON (contact fields, `calendar` with startTime / appointmentId,
     optional `customData` with “Quote Submission Url” pointing at …/quote/details/<uuid>).
 
+    Quote URL resolution **prefers `customData`** over contact merge fields so a stale
+    `contact.quote_submission_url` does not override the URL for the quote the user actually booked.
+
     Resolves `CustomerSubmission` by UUID from that URL when possible; otherwise maps GHL custom
     fields (Quote Value, Selected Services, Which Cleaning Package, etc.).
 
@@ -1042,7 +1113,8 @@ class GhlBookingConfirmedWebhookView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-        quote_url = _quote_submission_url_from_merged(merged)
+        # Prefer customData quote URL over contact fields (contact custom field is often stale).
+        quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
         sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
         submission = None
         if sub_uuid:
