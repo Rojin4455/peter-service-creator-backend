@@ -640,6 +640,44 @@ def _http_quote_url_from_dict_values(d):
     return None
 
 
+def _quote_url_from_attribution(payload):
+    """
+    GHL sets attributionSource.url (and contact.*) to the page URL for the session that led to
+    the calendar booking — e.g. https://site.../quote/details/<uuid> when the widget is embedded
+    on the quote page. This is more reliable than contact custom fields or workflow customData,
+    which are often empty or stale.
+    """
+    if not isinstance(payload, dict):
+        return None
+    blocks = []
+    for key in ("attributionSource", "lastAttributionSource"):
+        b = payload.get(key)
+        if isinstance(b, dict):
+            blocks.append(b)
+    contact = payload.get("contact")
+    if isinstance(contact, dict):
+        for key in ("attributionSource", "lastAttributionSource"):
+            b = contact.get(key)
+            if isinstance(b, dict):
+                blocks.append(b)
+    seen = set()
+    for b in blocks:
+        u = b.get("url")
+        if not isinstance(u, str):
+            continue
+        s = u.strip()
+        if not s.lower().startswith("http"):
+            continue
+        low = s.lower()
+        if "quote/details/" not in low and "submission_id=" not in low and "/booking?" not in low:
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        return s
+    return None
+
+
 def _merge_ghl_booking_payload_top_level(payload):
     """Merge customData into a flat dict for field lookup (quote URL, form keys)."""
     merged = _ghl_webhook_payload_merged(payload if isinstance(payload, dict) else {})
@@ -655,12 +693,16 @@ def _quote_submission_url_from_payload(payload):
     """
     URL used to resolve CustomerSubmission for the booking.
 
-    **customData first** — workflow webhook fields are usually correct for *this* booking.
-    Contact/top-level fields often still hold an older `quote_submission_url` from a previous
-    quote; our old merge order let that stale value win over customData.
+    1) **attributionSource.url** (top-level + nested under `contact`) — GHL records the quote page
+       URL for calendar bookings from an embedded widget (reliable).
+    2) **customData** — workflow merge fields (often empty or stale vs the open tab).
+    3) Other merged top-level contact fields as last resort.
     """
     if not isinstance(payload, dict):
         return None
+    url = _quote_url_from_attribution(payload)
+    if url:
+        return url
     cd = payload.get("customData")
     url = _first_http_quote_url_from_dict(cd)
     if url:
@@ -670,6 +712,9 @@ def _quote_submission_url_from_payload(payload):
         return url
     merged_top = _ghl_webhook_payload_merged(payload)
     url = _first_http_quote_url_from_dict(merged_top)
+    if url:
+        return url
+    url = _http_quote_url_from_dict_values(merged_top)
     if url:
         return url
     return None
@@ -1075,8 +1120,9 @@ class GhlBookingConfirmedWebhookView(APIView):
     Expects the standard workflow JSON (contact fields, `calendar` with startTime / appointmentId,
     optional `customData` with “Quote Submission Url” pointing at …/quote/details/<uuid>).
 
-    Quote URL resolution **prefers `customData`** over contact merge fields so a stale
-    `contact.quote_submission_url` does not override the URL for the quote the user actually booked.
+    Quote URL resolution prefers **attributionSource.url** (session page URL), then **customData**,
+    then other fields — so stale contact custom values do not override the quote page the user
+    had open when booking.
 
     Resolves `CustomerSubmission` by UUID from that URL when possible; otherwise maps GHL custom
     fields (Quote Value, Selected Services, Which Cleaning Package, etc.).
