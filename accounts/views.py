@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from decouple import config
 import requests
 from django.http import JsonResponse
@@ -22,14 +24,35 @@ GHL_CLIENT_ID = config("GHL_CLIENT_ID")
 GHL_CLIENT_SECRET = config("GHL_CLIENT_SECRET")
 GHL_REDIRECTED_URI = config("GHL_REDIRECTED_URI")
 TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token"
-SCOPE = config("SCOPE")
+
+# Used only if env SCOPE is unset. Include calendars.readonly + events read/write for Jobber→GHL block sync.
+DEFAULT_GHL_OAUTH_SCOPES = (
+    "contacts.readonly contacts.write "
+    "opportunities.readonly opportunities.write "
+    "locations.readonly "
+    "locations/customValues.readonly locations/customValues.write "
+    "locations/customFields.readonly locations/customFields.write "
+    "medias.readonly medias.write "
+    "calendars.readonly calendars/events.readonly calendars/events.write"
+)
+
 
 def auth_connect(request):
-    auth_url = ("https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&"
-                f"redirect_uri={GHL_REDIRECTED_URI}&"
-                f"client_id={GHL_CLIENT_ID}&"
-                f"scope={SCOPE}"
-                )
+    """
+    Redirect to GHL Marketplace OAuth. Query params must be URL-encoded — especially `scope`,
+    which is space-separated; leaving it unencoded often truncates after the first scope so
+    calendar APIs return 401 "not authorized for this scope".
+    """
+    scope = config("SCOPE", default=DEFAULT_GHL_OAUTH_SCOPES)
+    if isinstance(scope, str):
+        scope = " ".join(scope.split())
+    params = {
+        "response_type": "code",
+        "redirect_uri": GHL_REDIRECTED_URI,
+        "client_id": GHL_CLIENT_ID,
+        "scope": scope,
+    }
+    auth_url = "https://marketplace.gohighlevel.com/oauth/chooselocation?" + urlencode(params)
     return redirect(auth_url)
 
 
@@ -81,8 +104,9 @@ def tokens(request):
         )
         return JsonResponse({
             "message": "Authentication successful",
-            "access_token": response_data.get('access_token'),
-            "token_stored": True
+            "access_token": response_data.get("access_token"),
+            "token_stored": True,
+            "scope_granted": response_data.get("scope"),
         })
         
     except requests.exceptions.JSONDecodeError:
