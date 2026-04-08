@@ -31,7 +31,14 @@ class JobberClientGhlTagSyncStateAdmin(admin.ModelAdmin):
 
 @admin.register(GhlAppointmentJobberJobMap)
 class GhlAppointmentJobberJobMapAdmin(admin.ModelAdmin):
-    list_display = ("ghl_appointment_id", "jobber_job_id", "submission_id", "created_at")
+    list_display = (
+        "ghl_appointment_id",
+        "submission_id",
+        "jobber_job_id",
+        "booking_start_at",
+        "calendar_timezone",
+        "created_at",
+    )
     search_fields = ("ghl_appointment_id", "jobber_job_id", "submission_id")
     ordering = ("-created_at",)
     readonly_fields = ("created_at",)

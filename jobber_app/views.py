@@ -6,7 +6,10 @@ import logging
 import re
 import uuid
 from datetime import timedelta
+from datetime import timezone as dt_timezone
+
 from decouple import config
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
@@ -26,7 +29,54 @@ from .sync_ghl_calendar import (
 from .note_sync import sync_ghl_note_to_jobber
 from .tag_sync import sync_ghl_contact_tags_to_jobber, sync_jobber_client_tags_to_ghl
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
 logger = logging.getLogger(__name__)
+
+
+def _ghl_calendar_map_defaults_from_cal(cal):
+    """Build GhlAppointmentJobberJobMap time fields from workflow `calendar` JSON."""
+    defaults = {
+        "raw_start_time_iso": "",
+        "raw_end_time_iso": "",
+        "calendar_timezone": "",
+        "booking_start_at": None,
+        "booking_end_at": None,
+    }
+    if not isinstance(cal, dict):
+        return defaults
+    start_raw = (cal.get("startTime") or cal.get("start_time") or "").strip()
+    end_raw = (cal.get("endTime") or cal.get("end_time") or "").strip()
+    tz_name = (cal.get("selectedTimezone") or cal.get("timezone") or "").strip()
+    if start_raw:
+        defaults["raw_start_time_iso"] = start_raw[:80]
+    if end_raw:
+        defaults["raw_end_time_iso"] = end_raw[:80]
+    if tz_name:
+        defaults["calendar_timezone"] = tz_name[:128]
+
+    def _to_utc(s):
+        if not s:
+            return None
+        dt = parse_datetime(str(s).strip().replace("Z", "+00:00"))
+        if dt is None:
+            return None
+        if timezone.is_naive(dt):
+            if tz_name and ZoneInfo is not None:
+                try:
+                    dt = timezone.make_aware(dt, ZoneInfo(tz_name))
+                except Exception:
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+            else:
+                dt = timezone.make_aware(dt, dt_timezone.utc)
+        return dt.astimezone(dt_timezone.utc)
+
+    defaults["booking_start_at"] = _to_utc(start_raw)
+    defaults["booking_end_at"] = _to_utc(end_raw)
+    return defaults
 
 
 class JobberSearchClientsView(APIView):
@@ -1033,9 +1083,14 @@ class GhlBookingConfirmedWebhookView(APIView):
         jobber_id = job.get("id")
         if appt_id and jobber_id:
             sid = submission.id if submission is not None else None
+            time_defaults = _ghl_calendar_map_defaults_from_cal(cal)
             GhlAppointmentJobberJobMap.objects.update_or_create(
                 ghl_appointment_id=appt_id,
-                defaults={"jobber_job_id": str(jobber_id), "submission_id": sid},
+                defaults={
+                    "jobber_job_id": str(jobber_id),
+                    "submission_id": sid,
+                    **time_defaults,
+                },
             )
 
         return Response({"received": True, **(result or {})}, status=status.HTTP_201_CREATED)

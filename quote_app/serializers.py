@@ -246,12 +246,19 @@ class SubmissionImageSerializer(serializers.ModelSerializer):
 
 
 from service_app.serializers import GlobalSizePackageSerializer
+
+from jobber_app.models import GhlAppointmentJobberJobMap
+
+
 class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for customer submissions"""
     location_details = LocationPublicSerializer(source='location', read_only=True)
     city = serializers.SerializerMethodField()
     selected_services = serializers.SerializerMethodField()
     service_selections = serializers.SerializerMethodField()
+    # GHL calendar + Jobber: set when booking webhook ran for this submission
+    book = serializers.SerializerMethodField()
+    calendar_booking = serializers.SerializerMethodField()
     size_range = GlobalSizePackageSerializer(read_only=True)
     # addons = AddOnServiceSerializer(many=True, read_only=True)
     # addons = SubmissionAddOnSerializer(many=True, read_only=True)
@@ -312,7 +319,11 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             
             # Admin notes
             'bid_notes_private',
-            'bid_notes_public'
+            'bid_notes_public',
+
+            # After GHL inline calendar books → webhook creates Jobber job
+            'book',
+            'calendar_booking',
         ]
 
     def get_city(self, obj):
@@ -334,6 +345,50 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'question_responses__measurement_responses'
         )
         return CustomerServiceSelectionDetailSerializer(selections, many=True).data
+
+    def _latest_ghl_booking_row(self, obj):
+        cache = getattr(self, "_ghl_booking_row_by_submission", None)
+        if cache is None:
+            cache = {}
+            self._ghl_booking_row_by_submission = cache
+        sid = obj.id
+        if sid not in cache:
+            cache[sid] = GhlAppointmentJobberJobMap.latest_for_submission(sid)
+        return cache[sid]
+
+    def get_book(self, obj):
+        """True once a GHL calendar booking for this quote was processed (Jobber job created)."""
+        return self._latest_ghl_booking_row(obj) is not None
+
+    def get_calendar_booking(self, obj):
+        """
+        Details from the latest linked appointment map row (null if user has not booked yet).
+        Frontend: if book is True, hide the iframe and show confirmation using start_time / end_time.
+        """
+        row = self._latest_ghl_booking_row(obj)
+        if not row:
+            return None
+        start = (
+            row.booking_start_at.isoformat()
+            if row.booking_start_at
+            else (row.raw_start_time_iso or None)
+        )
+        end = (
+            row.booking_end_at.isoformat()
+            if row.booking_end_at
+            else (row.raw_end_time_iso or None)
+        )
+        return {
+            "booked": True,
+            "ghl_appointment_id": row.ghl_appointment_id,
+            "jobber_job_id": row.jobber_job_id,
+            "timezone": row.calendar_timezone or None,
+            "start_time": start,
+            "end_time": end,
+            "start_time_raw": row.raw_start_time_iso or None,
+            "end_time_raw": row.raw_end_time_iso or None,
+            "confirmed_at": row.created_at.isoformat() if row.created_at else None,
+        }
 
     def get_fields(self):
         fields = super().get_fields()

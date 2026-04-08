@@ -78,8 +78,14 @@ class GhlAppointmentJobberJobMap(models.Model):
 
     ghl_appointment_id = models.CharField(max_length=255, unique=True, db_index=True)
     jobber_job_id = models.CharField(max_length=255, db_index=True)
-    submission_id = models.UUIDField(null=True, blank=True)
+    submission_id = models.UUIDField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Populated from GHL workflow `calendar` object for quote UI / confirmation
+    booking_start_at = models.DateTimeField(null=True, blank=True)
+    booking_end_at = models.DateTimeField(null=True, blank=True)
+    calendar_timezone = models.CharField(max_length=128, blank=True, default="")
+    raw_start_time_iso = models.CharField(max_length=80, blank=True, default="")
+    raw_end_time_iso = models.CharField(max_length=80, blank=True, default="")
 
     class Meta:
         db_table = "ghl_appointment_jobber_job_map"
@@ -87,3 +93,14 @@ class GhlAppointmentJobberJobMap(models.Model):
 
     def __str__(self):
         return f"{self.ghl_appointment_id} → Jobber job {self.jobber_job_id}"
+
+    @classmethod
+    def latest_for_submission(cls, submission_id):
+        """Most recent calendar booking linked to this quote submission (UUID)."""
+        if not submission_id:
+            return None
+        return (
+            cls.objects.filter(submission_id=submission_id)
+            .order_by("-created_at")
+            .first()
+        )
