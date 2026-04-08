@@ -1121,7 +1121,10 @@ class GhlCalendarSyncFromJobberView(APIView):
       - after: ISO 8601 start of range (default: now UTC)
       - before: ISO 8601 end of range (default: now + 30 days UTC)
 
-    Requires env: GHL_LOCATION_ID, GHL_BOOKING_CALENDAR_ID (and GHL OAuth credentials in DB).
+    Requires env: GHL_LOCATION_ID, GHL_BOOKING_CALENDAR_ID.
+
+    GHL auth: set GHL_PRIVATE_INTEGRATION_TOKEN (or GHL_PIT) for Sub-Account Private Integration
+    calendar access, **or** store OAuth in GHLAuthCredentials via /api/accounts/auth/connect/.
     """
     permission_classes = [AllowAny]
 
