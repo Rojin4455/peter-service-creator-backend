@@ -654,12 +654,16 @@ def _quote_url_from_attribution(payload):
         b = payload.get(key)
         if isinstance(b, dict):
             blocks.append(b)
-    contact = payload.get("contact")
-    if isinstance(contact, dict):
-        for key in ("attributionSource", "lastAttributionSource"):
-            b = contact.get(key)
-            if isinstance(b, dict):
-                blocks.append(b)
+    for contact in (
+        payload.get("contact"),
+        (payload.get("calendar") or {}).get("contact") if isinstance(payload.get("calendar"), dict) else None,
+        (payload.get("appointment") or {}).get("contact") if isinstance(payload.get("appointment"), dict) else None,
+    ):
+        if isinstance(contact, dict):
+            for key in ("attributionSource", "lastAttributionSource"):
+                b = contact.get(key)
+                if isinstance(b, dict):
+                    blocks.append(b)
     seen = set()
     for b in blocks:
         u = b.get("url")
@@ -730,6 +734,14 @@ def _merge_ghl_contact_profile_into_merged(payload, merged):
         return
     c = payload.get("contact") if isinstance(payload.get("contact"), dict) else None
     if not c:
+        cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else None
+        if cal:
+            c = cal.get("contact") if isinstance(cal.get("contact"), dict) else None
+    if not c:
+        appt = payload.get("appointment") if isinstance(payload.get("appointment"), dict) else None
+        if appt:
+            c = appt.get("contact") if isinstance(appt.get("contact"), dict) else None
+    if not c:
         return
 
     def _fill(key, val):
@@ -766,12 +778,36 @@ def _merge_ghl_contact_profile_into_merged(payload, merged):
                 _fill(fk.split(".")[-1], val)
 
 
+def _pick_preferred_submission(subs, label):
+    """Prefer approved / packages_selected / submitted, then latest in list order."""
+    if not subs:
+        return None
+    preferred = ("approved", "packages_selected", "submitted")
+    for st in preferred:
+        for s in subs:
+            if getattr(s, "status", None) == st:
+                logger.info(
+                    "GHL booking: submission from %s picked submission=%s status=%s",
+                    label,
+                    s.id,
+                    st,
+                )
+                return s
+    s0 = subs[0]
+    logger.info(
+        "GHL booking: submission from %s picked latest submission=%s (no preferred status)",
+        label,
+        s0.id,
+    )
+    return s0
+
+
 def _resolve_customer_submission_for_booking(payload, merged):
     """
     Resolve CustomerSubmission for this appointment:
       1) UUID extracted from quote / booking URL (attribution, workflow customData, merged fields).
-      2) Else: GHL contact id on the payload → submissions with matching `ghl_contact_id`
-         (prefers approved / packages_selected / submitted, then latest updated).
+      2) GHL contact id anywhere in payload → `ghl_contact_id` match.
+      3) Email on merged payload → `customer_email__iexact` (calendar payloads sometimes omit contact id).
     """
     quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
     sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
@@ -795,37 +831,31 @@ def _resolve_customer_submission_for_booking(payload, merged):
                 return sub
 
     cid = _extract_ghl_webhook_contact_id(payload)
-    if not cid:
-        return None
-    subs = list(
-        CustomerSubmission.objects.select_related("location", "size_range")
-        .filter(ghl_contact_id=str(cid))
-        .order_by("-updated_at")[:25]
-    )
-    if not subs:
+    if cid:
+        subs = list(
+            CustomerSubmission.objects.select_related("location", "size_range")
+            .filter(ghl_contact_id=str(cid))
+            .order_by("-updated_at")[:25]
+        )
+        if subs:
+            return _pick_preferred_submission(subs, f"ghl_contact_id={cid}")
         logger.warning(
             "GHL booking: no CustomerSubmission with ghl_contact_id=%s (sync contact from quote flow)",
             cid,
         )
-        return None
-    preferred = ("approved", "packages_selected", "submitted")
-    for st in preferred:
-        for s in subs:
-            if getattr(s, "status", None) == st:
-                logger.info(
-                    "GHL booking: submission from ghl_contact_id=%s picked submission=%s status=%s",
-                    cid,
-                    s.id,
-                    st,
-                )
-                return s
-    s0 = subs[0]
-    logger.info(
-        "GHL booking: submission from ghl_contact_id=%s picked latest submission=%s (no preferred status)",
-        cid,
-        s0.id,
-    )
-    return s0
+
+    email = (merged.get("email") or "").strip()
+    if email:
+        subs = list(
+            CustomerSubmission.objects.select_related("location", "size_range")
+            .filter(customer_email__iexact=email)
+            .order_by("-updated_at")[:25]
+        )
+        if subs:
+            logger.info("GHL booking: resolving by customer_email=%s (contact id missing or no ghl link)", email)
+            return _pick_preferred_submission(subs, f"email={email}")
+
+    return None
 
 
 def _quote_submission_url_from_payload(payload):
@@ -1053,6 +1083,41 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "approved_price": total,
             }
             data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
+            return data
+        # Quote has a total but no package rows (e.g. package not denormalized on selections yet).
+        try:
+            total_only = float(submission.final_total)
+        except (TypeError, ValueError):
+            total_only = None
+        if (
+            first_name
+            and last_name
+            and (email or phone)
+            and total_only is not None
+            and total_only > 0
+        ):
+            svc = (types[0] if types else None) or "Cleaning service"
+            data = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "phone": phone,
+                "street1": street1,
+                "city": city,
+                "province": province,
+                "postal_code": postal_code,
+                "scheduled_start_iso": start_iso,
+                "service_type": svc,
+                "package_title": "Approved quote",
+                "package_description": "",
+                "approved_price": total_only,
+            }
+            data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
+            logger.info(
+                "GHL booking: using fallback single line from final_total=%s submission=%s",
+                total_only,
+                submission.id,
+            )
             return data
         return None
 
@@ -1309,10 +1374,13 @@ class GhlBookingConfirmedWebhookView(APIView):
             booking_data = _booking_confirm_dict_from_ghl_only(merged, cal)
 
         if not booking_data:
+            cid_dbg = _extract_ghl_webhook_contact_id(payload)
             logger.warning(
-                "GHL booking webhook: could not build booking payload (missing submission and GHL fields). "
-                "contact_id=%s keys=%s",
-                _extract_ghl_webhook_contact_id(payload),
+                "GHL booking webhook: could not build booking_data. contact_id=%s submission_found=%s "
+                "email_in_merged=%s keys=%s",
+                cid_dbg,
+                submission is not None,
+                bool((merged.get("email") or "").strip()) if isinstance(merged, dict) else False,
                 sorted(merged.keys())[:50] if isinstance(merged, dict) else [],
             )
             return Response(
@@ -1418,7 +1486,8 @@ def _parse_webhook_json_payload(request):
     raw = getattr(request, "body", b"") or b""
     if raw:
         try:
-            text = raw.decode("utf-8").strip()
+            text = raw.decode("utf-8")
+            text = text.lstrip("\ufeff").strip()
             if text.startswith("{"):
                 parsed = json.loads(text)
                 if isinstance(parsed, dict):
@@ -1620,23 +1689,85 @@ def _ghl_webhook_payload_merged(data):
     return merged
 
 
+def _coerce_ghl_id(val):
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _contact_id_candidates_from_dict(d):
+    if not isinstance(d, dict):
+        return []
+    out = []
+    c = d.get("contact")
+    if isinstance(c, dict):
+        for k in ("id", "contactId", "_id", "contact_id"):
+            v = _coerce_ghl_id(c.get(k))
+            if v:
+                out.append(v)
+    for k in (
+        "contactId",
+        "contact_id",
+        "ContactId",
+        "customerId",
+        "customer_id",
+        "crmContactId",
+    ):
+        v = _coerce_ghl_id(d.get(k))
+        if v:
+            out.append(v)
+    for k in ("client", "customer", "attendee", "bookedBy"):
+        blk = d.get(k)
+        if isinstance(blk, dict):
+            v = _coerce_ghl_id(blk.get("id") or blk.get("contactId") or blk.get("customerId"))
+            if v:
+                out.append(v)
+    return out
+
+
 def _extract_ghl_webhook_contact_id(data):
     """
     Resolve contact id from GHL workflow / webhook JSON (nested shapes, body wrapper, common keys).
+
+    Calendar appointment payloads often nest `contactId` under `calendar` / `appointment` only —
+    not at the top level.
     """
+    if not isinstance(data, dict):
+        return None
     merged = _ghl_webhook_payload_merged(data)
+    candidates = []
+    if merged:
+        candidates.extend(_contact_id_candidates_from_dict(merged))
+
+    for blk in (
+        data.get("calendar"),
+        data.get("appointment"),
+        data.get("booking"),
+        data.get("meta"),
+        data.get("payload"),
+        data.get("event"),
+    ):
+        if isinstance(blk, dict):
+            candidates.extend(_contact_id_candidates_from_dict(blk))
+            nested = blk.get("appointment")
+            if isinstance(nested, dict):
+                candidates.extend(_contact_id_candidates_from_dict(nested))
+
+    cal = data.get("calendar")
+    if isinstance(cal, dict):
+        ap = cal.get("appointment")
+        if isinstance(ap, dict):
+            candidates.extend(_contact_id_candidates_from_dict(ap))
+
+    for cid in candidates:
+        if cid:
+            return cid
+
     if not merged:
         return None
-    contact_id = merged.get("contactId") or merged.get("contact_id") or merged.get("ContactId")
-    c = merged.get("contact")
-    if isinstance(c, dict):
-        contact_id = contact_id or c.get("id") or c.get("contactId")
-    if not contact_id:
-        lowered = {str(k).lower(): v for k, v in merged.items()}
-        contact_id = lowered.get("contactid") or lowered.get("contact_id")
-    if contact_id is not None:
-        contact_id = str(contact_id).strip()
-    return contact_id or None
+    lowered = {str(k).lower(): v for k, v in merged.items()}
+    return _coerce_ghl_id(lowered.get("contactid") or lowered.get("contact_id"))
 
 
 def _extract_ghl_webhook_tags(data):
