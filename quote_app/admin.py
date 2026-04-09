@@ -15,7 +15,7 @@ class CustomerSubmissionAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Customer Information', {
-            'fields': ('first_name', 'last_name', 'company_name', 'customer_email', 'customer_phone', 'postal_code')
+            'fields': ('first_name', 'last_name', 'company_name', 'customer_email', 'customer_phone', 'postal_code', 'ghl_contact_id')
         }),
         ('Address Information', {
             'fields': ('street_address', 'location')

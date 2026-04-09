@@ -678,6 +678,34 @@ def _quote_url_from_attribution(payload):
     return None
 
 
+def _coerce_stringly_json_payload(payload):
+    """
+    GHL sometimes sends customData or body as a JSON **string**. DRF/request.data can also flatten
+    nested objects incorrectly. Parse those strings so quote URL / ids are visible as real dicts.
+    """
+    if not isinstance(payload, dict):
+        return
+    for key in ("customData", "custom_data"):
+        v = payload.get(key)
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("{") or s.startswith("["):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, dict):
+                        payload[key] = parsed
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+    b = payload.get("body")
+    if isinstance(b, str) and b.strip().startswith("{"):
+        try:
+            inner = json.loads(b.strip())
+            if isinstance(inner, dict):
+                payload["body"] = inner
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+
 def _merge_ghl_booking_payload_top_level(payload):
     """Merge customData into a flat dict for field lookup (quote URL, form keys)."""
     merged = _ghl_webhook_payload_merged(payload if isinstance(payload, dict) else {})
@@ -687,6 +715,117 @@ def _merge_ghl_booking_payload_top_level(payload):
             if k not in merged or merged.get(k) in ("", None):
                 merged[k] = v
     return merged
+
+
+def _merge_ghl_contact_profile_into_merged(payload, merged):
+    """
+    Copy standard fields + customFields from nested `contact` into `merged`.
+
+    Workflow **Custom Data** merge tags (e.g. {{contact.quote_submission_url}}) often resolve to
+    empty or stale values. The same booking payload usually still includes `contact` with
+    `customFields` from the live CRM record — we read those so the quote URL is available even when
+    the webhook action's customData failed to interpolate.
+    """
+    if not isinstance(merged, dict):
+        return
+    c = payload.get("contact") if isinstance(payload.get("contact"), dict) else None
+    if not c:
+        return
+
+    def _fill(key, val):
+        if val in (None, ""):
+            return
+        if key not in merged or merged.get(key) in ("", None):
+            merged[key] = val
+
+    _fill("first_name", c.get("firstName") or c.get("first_name"))
+    _fill("last_name", c.get("lastName") or c.get("last_name"))
+    _fill("email", c.get("email"))
+    _fill("phone", c.get("phone") or c.get("phoneNumber") or c.get("mobile"))
+    _fill("address1", c.get("address1"))
+    _fill("city", c.get("city"))
+    _fill("state", c.get("state"))
+    _fill("postalCode", c.get("postalCode") or c.get("postal_code"))
+
+    cfs = c.get("customFields")
+    if not isinstance(cfs, list):
+        return
+    for item in cfs:
+        if not isinstance(item, dict):
+            continue
+        val = item.get("value")
+        if val in (None, ""):
+            continue
+        fk = str(item.get("fieldKey") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if name:
+            _fill(name, val)
+        if fk:
+            _fill(fk, val)
+            if "." in fk:
+                _fill(fk.split(".")[-1], val)
+
+
+def _resolve_customer_submission_for_booking(payload, merged):
+    """
+    Resolve CustomerSubmission for this appointment:
+      1) UUID extracted from quote / booking URL (attribution, workflow customData, merged fields).
+      2) Else: GHL contact id on the payload → submissions with matching `ghl_contact_id`
+         (prefers approved / packages_selected / submitted, then latest updated).
+    """
+    quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
+    sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
+    if sub_uuid:
+        try:
+            uid = uuid.UUID(str(sub_uuid))
+        except ValueError:
+            uid = None
+        if uid:
+            sub = (
+                CustomerSubmission.objects.select_related("location", "size_range")
+                .filter(id=uid)
+                .first()
+            )
+            if sub:
+                logger.info(
+                    "GHL booking: submission from quote URL submission_id=%s url_present=%s",
+                    sub.id,
+                    bool(quote_url),
+                )
+                return sub
+
+    cid = _extract_ghl_webhook_contact_id(payload)
+    if not cid:
+        return None
+    subs = list(
+        CustomerSubmission.objects.select_related("location", "size_range")
+        .filter(ghl_contact_id=str(cid))
+        .order_by("-updated_at")[:25]
+    )
+    if not subs:
+        logger.warning(
+            "GHL booking: no CustomerSubmission with ghl_contact_id=%s (sync contact from quote flow)",
+            cid,
+        )
+        return None
+    preferred = ("approved", "packages_selected", "submitted")
+    for st in preferred:
+        for s in subs:
+            if getattr(s, "status", None) == st:
+                logger.info(
+                    "GHL booking: submission from ghl_contact_id=%s picked submission=%s status=%s",
+                    cid,
+                    s.id,
+                    st,
+                )
+                return s
+    s0 = subs[0]
+    logger.info(
+        "GHL booking: submission from ghl_contact_id=%s picked latest submission=%s (no preferred status)",
+        cid,
+        s0.id,
+    )
+    return s0
 
 
 def _quote_submission_url_from_payload(payload):
@@ -1118,14 +1257,16 @@ class GhlBookingConfirmedWebhookView(APIView):
     POST — GoHighLevel workflow webhook after a contact books (e.g. “Customer Booked Appointment”).
 
     Expects the standard workflow JSON (contact fields, `calendar` with startTime / appointmentId,
-    optional `customData` with “Quote Submission Url” pointing at …/quote/details/<uuid>).
+    optional workflow `customData`).
 
-    Quote URL resolution prefers **attributionSource.url** (session page URL), then **customData**,
-    then other fields — so stale contact custom values do not override the quote page the user
-    had open when booking.
+    **Why `{{contact.quote_submission_url}}` in Custom Data is flaky:** that merge tag is
+    re-evaluated when the HTTP action runs. It can be blank, lagging, or wrong compared to what you
+    see on the contact record in the UI. The payload still usually includes `contact` with
+    `customFields`; we merge those into the same lookup dict and also fall back to
+    `contact.id` → `CustomerSubmission.ghl_contact_id`.
 
-    Resolves `CustomerSubmission` by UUID from that URL when possible; otherwise maps GHL custom
-    fields (Quote Value, Selected Services, Which Cleaning Package, etc.).
+    URL resolution order: attribution **page** URL (quote/details), workflow customData, merged
+    contact custom fields, then other merged keys.
 
     Auth (recommended): set GHL_BOOKING_WEBHOOK_SECRET and send header X-GHL-Booking-Webhook-Secret.
 
@@ -1141,6 +1282,7 @@ class GhlBookingConfirmedWebhookView(APIView):
 
         payload = _parse_webhook_json_payload(request)
         merged = _merge_ghl_booking_payload_top_level(payload)
+        _merge_ghl_contact_profile_into_merged(payload, merged)
         cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else {}
 
         appt_id = ""
@@ -1159,21 +1301,7 @@ class GhlBookingConfirmedWebhookView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-        # Prefer customData quote URL over contact fields (contact custom field is often stale).
-        quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
-        sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
-        submission = None
-        if sub_uuid:
-            try:
-                uid = uuid.UUID(str(sub_uuid))
-            except ValueError:
-                uid = None
-            if uid:
-                submission = (
-                    CustomerSubmission.objects.select_related("location", "size_range")
-                    .filter(id=uid)
-                    .first()
-                )
+        submission = _resolve_customer_submission_for_booking(payload, merged)
 
         if submission is not None:
             booking_data = _booking_confirm_dict_from_submission(submission, merged, cal)
@@ -1182,13 +1310,16 @@ class GhlBookingConfirmedWebhookView(APIView):
 
         if not booking_data:
             logger.warning(
-                "GHL booking webhook: could not build booking payload (missing submission and GHL fields). keys=%s",
-                sorted(merged.keys())[:40] if isinstance(merged, dict) else [],
+                "GHL booking webhook: could not build booking payload (missing submission and GHL fields). "
+                "contact_id=%s keys=%s",
+                _extract_ghl_webhook_contact_id(payload),
+                sorted(merged.keys())[:50] if isinstance(merged, dict) else [],
             )
             return Response(
                 {
-                    "error": "Could not build booking: provide a quote URL with submission UUID in customData, "
-                    "or GHL fields Quote Value / Selected Services / contact details.",
+                    "error": "Could not build booking: ensure the contact is linked to a quote "
+                    "(submission.ghl_contact_id), or send a quote URL / UUID, or GHL fields "
+                    "Quote Value / Selected Services / contact details.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1277,19 +1408,38 @@ def _can_run_jobber_webhook(request):
 
 
 def _parse_webhook_json_payload(request):
-    """DRF QueryDict or raw JSON body → dict."""
+    """
+    Raw JSON body → dict (preferred). Falls back to DRF parsed data.
+
+    Prefer `request.body` so nested `contact`, `calendar`, and `customData` are preserved.
+    Using `request.data.dict()` first can flatten / stringify nested JSON and strip workflow fields.
+    """
     payload = {}
-    if hasattr(request.data, "get"):
+    raw = getattr(request, "body", b"") or b""
+    if raw:
         try:
-            payload = request.data.dict() if hasattr(request.data, "dict") else dict(request.data)
+            text = raw.decode("utf-8").strip()
+            if text.startswith("{"):
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    payload = parsed
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if not payload and hasattr(request, "data") and request.data is not None:
+        rd = request.data
+        try:
+            if isinstance(rd, dict):
+                payload = dict(rd)
+            elif hasattr(rd, "dict"):
+                payload = dict(rd.dict())
+            else:
+                payload = dict(rd)
         except Exception:
             payload = {}
-    if not payload and request.body:
-        try:
-            payload = json.loads(request.body.decode("utf-8"))
-        except Exception:
-            payload = {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    _coerce_stringly_json_payload(payload)
+    return payload
 
 
 def _extract_jobber_webhook_fields(payload):
