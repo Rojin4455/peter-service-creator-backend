@@ -789,23 +789,96 @@ def _derived_quote_total_from_submission(submission):
             return roll
     except (TypeError, ValueError):
         pass
+    ad = submission.additional_data if isinstance(submission.additional_data, dict) else {}
+    for key in (
+        "final_total",
+        "approved_price",
+        "quote_total",
+        "total_price",
+        "grand_total",
+        "quote_value",
+        "total",
+    ):
+        f = _parse_priceish_number(ad.get(key))
+        if f is not None:
+            return f
+    # In-person bids: no dollar amount until the visit — still create a scheduled Jobber job at $0.
+    if getattr(submission, "is_bid_in_person", False):
+        return 0.0
     return None
 
 
+def _parse_priceish_number(val):
+    """Parse GHL / form values like 525, '525.00', '$1,234.56' → positive float or None."""
+    if val in (None, ""):
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except (TypeError, ValueError):
+            return None
+    s = str(val).strip()
+    if not s:
+        return None
+    for ch in ("$", "€", "£", ",", " ", "\u00a0"):
+        s = s.replace(ch, "")
+    try:
+        f = float(s)
+        return f if f > 0 else None
+    except ValueError:
+        return None
+
+
 def _merged_ghl_quote_price(merged):
-    """First positive price from GHL flat merge fields (workflow sends hundreds of keys)."""
+    """
+    First positive price from GHL workflow payload.
+
+    Custom Data keys like `Quote Value` + `{{contact.quote_value}}` only work when that merge tag
+    resolves non-empty at send time — otherwise scan flat keys (408+) for quote-related fields.
+    """
     if not isinstance(merged, dict):
         return None
-    for k in ("Quote Value", "Total Price", "final_total", "quote_value", "Quote value"):
-        v = merged.get(k)
-        if v in (None, ""):
-            continue
-        try:
-            f = float(v)
-            if f > 0:
+    explicit_keys = (
+        "Quote Value",
+        "Quote value",
+        "quote_value",
+        "Total Price",
+        "total_price",
+        "final_total",
+        "contact.quote_value",
+        "contact.quoteValue",
+        "approved_price",
+        "Approved Price",
+        "Quote Total",
+        "quote_total",
+        "Grand Total",
+        "Invoice Total",
+        "Total",
+    )
+    for k in explicit_keys:
+        f = _parse_priceish_number(merged.get(k))
+        if f is not None:
+            return f
+    lower_exact = {str(k).lower(): v for k, v in merged.items() if isinstance(k, str)}
+    for lk in ("quote value", "total price", "quote_value", "approved price"):
+        if lk in lower_exact:
+            f = _parse_priceish_number(lower_exact[lk])
+            if f is not None:
                 return f
-        except (TypeError, ValueError):
+    for k, v in merged.items():
+        if not isinstance(k, str):
             continue
+        kl = k.replace("_", " ").lower()
+        if "quote" not in kl:
+            continue
+        if not any(x in kl for x in ("value", "total", "price", "amount")):
+            continue
+        f = _parse_priceish_number(v)
+        if f is not None:
+            return f
     return None
 
 
@@ -860,7 +933,12 @@ def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg)
             ft = float(submission.final_total)
         except (TypeError, ValueError):
             ft = None
-        if (ft is None or ft <= 0) and (derived_db is None or derived_db <= 0):
+        bid_ip = getattr(submission, "is_bid_in_person", False)
+        if (
+            not bid_ip
+            and (ft is None or ft <= 0)
+            and (derived_db is None or derived_db <= 0)
+        ):
             qp = _merged_ghl_quote_price(m)
             if qp is None or qp <= 0:
                 hints.append(
@@ -868,6 +946,11 @@ def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg)
                     "package quotes / rollups, and GHL Quote Value is empty — complete package pricing "
                     "on the quote or set Quote Value on the contact."
                 )
+        if bid_ip and (derived_db is None or derived_db <= 0):
+            hints.append(
+                "This submission is bid-in-person (is_bid_in_person=True): a $0 Jobber job is allowed "
+                "after deploy; if you still see this error, check name/email/phone and package rows."
+            )
         if not (fn and ln):
             hints.append("Missing first_name/last_name (add firstName/lastName or first_name/last_name to payload).")
         if not em and not ph:
@@ -887,6 +970,7 @@ def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg)
         "merged_quote_value_raw": m.get("Quote Value"),
         "merged_ghl_price_parsed": _merged_ghl_quote_price(m),
         "payload_key_count": len(payload) if isinstance(payload, dict) else 0,
+        "is_bid_in_person": getattr(submission, "is_bid_in_person", False) if submission is not None else False,
     }
 
 
@@ -1251,7 +1335,9 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                     except (TypeError, ValueError):
                         line_price = 0.0
         if line_price <= 0:
-            continue
+            if not getattr(submission, "is_bid_in_person", False):
+                continue
+            line_price = 0.0
         services_rows.append(
             {
                 "service_type": sel.service.name,
@@ -1268,7 +1354,8 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
             sp = selections[0].selected_package
             pkg_name = sp.name if sp else ""
         sub_total = _derived_quote_total_from_submission(submission)
-        if types and sub_total is not None and sub_total > 0:
+        bid_ip = getattr(submission, "is_bid_in_person", False)
+        if types and sub_total is not None and (sub_total > 0 or bid_ip):
             data = {
                 "first_name": first_name,
                 "last_name": last_name,
@@ -1282,16 +1369,26 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "service_types": types,
                 "package_title": pkg_name or "Approved services",
                 "package_description": "",
-                "approved_price": sub_total,
+                "approved_price": float(sub_total),
             }
             data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
             return data
         ghl_price = _merged_ghl_quote_price(m)
-        price_for_job = sub_total if (sub_total is not None and sub_total > 0) else None
+        price_for_job = None
+        if sub_total is not None and (sub_total > 0 or bid_ip):
+            price_for_job = float(sub_total)
         if price_for_job is None and ghl_price is not None and ghl_price > 0:
             price_for_job = ghl_price
-        if first_name and last_name and (email or phone) and price_for_job is not None and price_for_job > 0:
-            svc = (types[0] if types else None) or "Cleaning service"
+        if (
+            first_name
+            and last_name
+            and (email or phone)
+            and price_for_job is not None
+            and (price_for_job > 0 or bid_ip)
+        ):
+            svc = (types[0] if types else None) or (
+                "Bid in person (price TBD)" if bid_ip else "Cleaning service"
+            )
             data = {
                 "first_name": first_name,
                 "last_name": last_name,
@@ -1303,7 +1400,9 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "postal_code": postal_code,
                 "scheduled_start_iso": start_iso,
                 "service_type": svc,
-                "package_title": pkg_name or "Approved quote",
+                "package_title": (pkg_name or "Bid in person — price TBD")
+                if bid_ip
+                else (pkg_name or "Approved quote"),
                 "package_description": "",
                 "approved_price": price_for_job,
             }
@@ -1387,15 +1486,7 @@ def _booking_confirm_dict_from_ghl_only(merged, calendar_obj):
     if not types:
         types = ["Cleaning Service"]
 
-    price = merged.get("Quote Value")
-    if price in (None, ""):
-        price = merged.get("Total Price")
-    if price in (None, ""):
-        price = merged.get("final_total")
-    try:
-        price_f = float(price)
-    except (TypeError, ValueError):
-        price_f = None
+    price_f = _merged_ghl_quote_price(merged)
     if price_f is None or price_f <= 0:
         return None
 
