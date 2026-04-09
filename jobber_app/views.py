@@ -1413,6 +1413,109 @@ class GhlBookingConfirmedWebhookView(APIView):
         return Response({"received": True, **(result or {})}, status=status.HTTP_201_CREATED)
 
 
+def _ghl_booking_debug_shallow_dict(obj, max_keys=60, value_max_len=180):
+    """Summarize a dict for debug JSON (avoid huge responses)."""
+    if not isinstance(obj, dict):
+        return {"_type": type(obj).__name__}
+    out = {}
+    for k in sorted(obj.keys())[:max_keys]:
+        v = obj[k]
+        if isinstance(v, dict):
+            out[k] = f"<dict {len(v)} keys>"
+        elif isinstance(v, list):
+            out[k] = f"<list len={len(v)}>"
+        else:
+            s = "" if v is None else str(v)
+            if len(s) > value_max_len:
+                s = s[:value_max_len] + "…"
+            out[k] = s
+    if len(obj) > max_keys:
+        out["_truncated"] = True
+    return out
+
+
+class GhlBookingWebhookDebugView(APIView):
+    """
+    POST — **Diagnostics only** (creates no Jobber job, writes no map row).
+
+    Same auth as `GhlBookingConfirmedWebhookView` (`GHL_BOOKING_WEBHOOK_SECRET` +
+    `X-GHL-Booking-Webhook-Secret` when secret is configured).
+
+    Temporarily set your GHL workflow webhook URL to this path, run one booking, inspect the JSON
+    response. Compare `raw_body_preview` and `content_type` to what webhook.site shows — if GHL posts
+    form-encoded data or a different JSON shape to your server, it will show up here.
+
+    Path (under your API prefix): `.../webhooks/ghl/booking-confirmed/debug/`
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not _can_run_ghl_booking_webhook(request):
+            return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        raw = getattr(request, "body", b"") or b""
+        ct_full = request.META.get("CONTENT_TYPE") or ""
+        ct = ct_full.split(";")[0].strip()
+
+        parse_note = None
+        if raw:
+            try:
+                text = raw.decode("utf-8")
+                text = text.lstrip("\ufeff").strip()
+                if not text.startswith("{"):
+                    parse_note = "raw_body does not start with '{' — often form-encoded or HTML, not JSON"
+            except UnicodeDecodeError as e:
+                parse_note = f"utf8_decode_error: {e}"
+
+        payload = _parse_webhook_json_payload(request)
+        merged = _merge_ghl_booking_payload_top_level(payload)
+        _merge_ghl_contact_profile_into_merged(payload, merged)
+        cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else {}
+
+        quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
+        sub_uuid = _extract_submission_uuid_from_quote_url(quote_url)
+        cid = _extract_ghl_webhook_contact_id(payload)
+        submission = _resolve_customer_submission_for_booking(payload, merged)
+        if submission is not None:
+            booking_data = _booking_confirm_dict_from_submission(submission, merged, cal)
+        else:
+            booking_data = _booking_confirm_dict_from_ghl_only(merged, cal)
+
+        cd = payload.get("customData")
+        cd_out = None
+        if isinstance(cd, dict):
+            cd_out = _ghl_booking_debug_shallow_dict(cd, max_keys=40, value_max_len=500)
+        elif cd is not None:
+            cd_out = str(cd)[:500]
+
+        preview_len = int(config("GHL_BOOKING_WEBHOOK_DEBUG_BODY_CHARS", default="6000"))
+        preview_len = max(500, min(preview_len, 50000))
+        raw_preview = raw.decode("utf-8", errors="replace")[:preview_len]
+
+        return Response(
+            {
+                "debug": True,
+                "content_type": ct,
+                "content_type_full": ct_full[:200],
+                "raw_body_bytes": len(raw),
+                "raw_body_preview": raw_preview,
+                "parse_hint": parse_note,
+                "payload_top_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+                "customData": cd_out,
+                "calendar_keys": sorted(cal.keys()) if isinstance(cal, dict) else None,
+                "extracted_contact_id": cid,
+                "quote_url": (quote_url[:800] + "…") if quote_url and len(quote_url) > 800 else quote_url,
+                "extracted_submission_uuid": sub_uuid,
+                "submission_id": str(submission.id) if submission else None,
+                "submission_status": getattr(submission, "status", None) if submission else None,
+                "booking_data_ok": bool(booking_data),
+                "merged_fields": _ghl_booking_debug_shallow_dict(merged, max_keys=80, value_max_len=160),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 def _can_run_ghl_calendar_sync(request):
     """Allow sync if X-GHL-Calendar-Sync-Secret matches env, or authenticated admin user."""
     expected = config("GHL_CALENDAR_SYNC_SECRET", default="").strip()

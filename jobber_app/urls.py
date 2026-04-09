@@ -26,6 +26,11 @@ urlpatterns = [
         name="ghl-booking-confirmed-webhook",
     ),
     path(
+        "webhooks/ghl/booking-confirmed/debug/",
+        views.GhlBookingWebhookDebugView.as_view(),
+        name="ghl-booking-confirmed-webhook-debug",
+    ),
+    path(
         "clients/sync-tags-to-ghl/",
         views.JobberClientSyncTagsToGhlView.as_view(),
         name="jobber-client-sync-tags-to-ghl",
