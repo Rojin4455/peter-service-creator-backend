@@ -728,6 +728,101 @@ def _coerce_stringly_json_payload(payload):
                 cal[subk] = inner
 
 
+def _merged_ghl_quote_price(merged):
+    """First positive price from GHL flat merge fields (workflow sends hundreds of keys)."""
+    if not isinstance(merged, dict):
+        return None
+    for k in ("Quote Value", "Total Price", "final_total", "quote_value", "Quote value"):
+        v = merged.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            f = float(v)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _normalize_flat_ghl_identity_into_merged(merged):
+    """
+    GHL workflow JSON often uses camelCase at the top level (firstName, lastName) with no nested
+    `contact` object — without this, email/contact resolution and Jobber client fields stay empty.
+    """
+    if not isinstance(merged, dict):
+        return
+    if not (merged.get("first_name") or "").strip():
+        fn = merged.get("firstName") or merged.get("First Name")
+        if fn not in (None, ""):
+            merged["first_name"] = str(fn).strip()
+    if not (merged.get("last_name") or "").strip():
+        ln = merged.get("lastName") or merged.get("Last Name")
+        if ln not in (None, ""):
+            merged["last_name"] = str(ln).strip()
+    if not (merged.get("email") or "").strip():
+        em = merged.get("Email") or merged.get("contact_email")
+        if em not in (None, ""):
+            merged["email"] = str(em).strip()
+    if merged.get("phone") in (None, ""):
+        ph = merged.get("phoneNumber") or merged.get("Phone") or merged.get("mobile")
+        if ph not in (None, ""):
+            merged["phone"] = str(ph).strip()
+
+
+def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg):
+    """Structured diagnostics for 400 responses (visible in GHL workflow execution)."""
+    cal = payload.get("calendar") if isinstance(payload, dict) else None
+    cal_ok = isinstance(cal, dict)
+    appt = ""
+    if cal_ok:
+        appt = str(cal.get("appointmentId") or cal.get("id") or "").strip()
+    m = merged if isinstance(merged, dict) else {}
+    fn = (m.get("first_name") or m.get("firstName") or "").strip()
+    ln = (m.get("last_name") or m.get("lastName") or "").strip()
+    em = (m.get("email") or m.get("Email") or "").strip()
+    ph = m.get("phone") or m.get("Phone") or m.get("phoneNumber")
+    ph = str(ph).strip() if ph not in (None, "") else ""
+    hints = []
+    if submission is None:
+        hints.append(
+            "No CustomerSubmission: check quote URL in payload, contact_id vs submission.ghl_contact_id, "
+            "or email match."
+        )
+    else:
+        hints.append("Submission matched but Jobber booking payload could not be built.")
+        try:
+            ft = float(submission.final_total)
+        except (TypeError, ValueError):
+            ft = None
+        if ft is None or ft <= 0:
+            qp = _merged_ghl_quote_price(m)
+            if qp is None or qp <= 0:
+                hints.append(
+                    "submission.final_total is 0 and merged Quote Value / Total Price is empty or zero — "
+                    "set an approved total on the quote or sync Quote Value on the GHL contact."
+                )
+        if not (fn and ln):
+            hints.append("Missing first_name/last_name (add firstName/lastName or first_name/last_name to payload).")
+        if not em and not ph:
+            hints.append("Missing email and phone on webhook payload.")
+    return {
+        "failure_reason": "submission_not_resolved" if submission is None else "booking_payload_incomplete",
+        "hints": hints,
+        "extracted_contact_id": cid_dbg,
+        "submission_id": str(submission.id) if submission is not None else None,
+        "quote_url_detected": bool(quote_url),
+        "calendar_present": cal_ok,
+        "calendar_appointment_id": appt or None,
+        "merged_has_first_last": bool(fn and ln),
+        "merged_has_email_or_phone": bool(em or ph),
+        "submission_final_total": float(submission.final_total) if submission is not None else None,
+        "merged_quote_value_raw": m.get("Quote Value"),
+        "merged_ghl_price_parsed": _merged_ghl_quote_price(m),
+        "payload_key_count": len(payload) if isinstance(payload, dict) else 0,
+    }
+
+
 def _merge_ghl_booking_payload_top_level(payload):
     """Merge customData into a flat dict for field lookup (quote URL, form keys)."""
     merged = _ghl_webhook_payload_merged(payload if isinstance(payload, dict) else {})
@@ -1090,10 +1185,10 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
             sp = selections[0].selected_package
             pkg_name = sp.name if sp else ""
         try:
-            total = float(submission.final_total)
+            sub_total = float(submission.final_total)
         except (TypeError, ValueError):
-            total = None
-        if types and total is not None and total > 0:
+            sub_total = None
+        if types and sub_total is not None and sub_total > 0:
             data = {
                 "first_name": first_name,
                 "last_name": last_name,
@@ -1107,22 +1202,15 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "service_types": types,
                 "package_title": pkg_name or "Approved services",
                 "package_description": "",
-                "approved_price": total,
+                "approved_price": sub_total,
             }
             data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
             return data
-        # Quote has a total but no package rows (e.g. package not denormalized on selections yet).
-        try:
-            total_only = float(submission.final_total)
-        except (TypeError, ValueError):
-            total_only = None
-        if (
-            first_name
-            and last_name
-            and (email or phone)
-            and total_only is not None
-            and total_only > 0
-        ):
+        ghl_price = _merged_ghl_quote_price(m)
+        price_for_job = sub_total if (sub_total is not None and sub_total > 0) else None
+        if price_for_job is None and ghl_price is not None and ghl_price > 0:
+            price_for_job = ghl_price
+        if first_name and last_name and (email or phone) and price_for_job is not None and price_for_job > 0:
             svc = (types[0] if types else None) or "Cleaning service"
             data = {
                 "first_name": first_name,
@@ -1135,14 +1223,16 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "postal_code": postal_code,
                 "scheduled_start_iso": start_iso,
                 "service_type": svc,
-                "package_title": "Approved quote",
+                "package_title": pkg_name or "Approved quote",
                 "package_description": "",
-                "approved_price": total_only,
+                "approved_price": price_for_job,
             }
             data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
             logger.info(
-                "GHL booking: using fallback single line from final_total=%s submission=%s",
-                total_only,
+                "GHL booking: fallback single line price=%s (submission.final_total=%s ghl_quote=%s) submission=%s",
+                price_for_job,
+                sub_total,
+                ghl_price,
                 submission.id,
             )
             return data
@@ -1375,6 +1465,7 @@ class GhlBookingConfirmedWebhookView(APIView):
         payload = _parse_webhook_json_payload(request)
         merged = _merge_ghl_booking_payload_top_level(payload)
         _merge_ghl_contact_profile_into_merged(payload, merged)
+        _normalize_flat_ghl_identity_into_merged(merged)
         cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else {}
 
         appt_id = ""
@@ -1394,6 +1485,7 @@ class GhlBookingConfirmedWebhookView(APIView):
                 )
 
         submission = _resolve_customer_submission_for_booking(payload, merged)
+        quote_url_dbg = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
 
         if submission is not None:
             booking_data = _booking_confirm_dict_from_submission(submission, merged, cal)
@@ -1402,19 +1494,20 @@ class GhlBookingConfirmedWebhookView(APIView):
 
         if not booking_data:
             cid_dbg = _extract_ghl_webhook_contact_id(payload)
+            detail = _ghl_booking_failure_detail(submission, merged, payload, quote_url_dbg, cid_dbg)
             logger.warning(
                 "GHL booking webhook: could not build booking_data. contact_id=%s submission_found=%s "
-                "email_in_merged=%s keys=%s",
+                "email_in_merged=%s failure_reason=%s keys_sample=%s",
                 cid_dbg,
                 submission is not None,
                 bool((merged.get("email") or "").strip()) if isinstance(merged, dict) else False,
+                detail.get("failure_reason"),
                 sorted(merged.keys())[:50] if isinstance(merged, dict) else [],
             )
             return Response(
                 {
-                    "error": "Could not build booking: ensure the contact is linked to a quote "
-                    "(submission.ghl_contact_id), or send a quote URL / UUID, or GHL fields "
-                    "Quote Value / Selected Services / contact details.",
+                    "error": "Could not build booking. See failure_reason, hints, and diagnostics.",
+                    **detail,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1498,6 +1591,7 @@ class GhlBookingWebhookDebugView(APIView):
         payload = _parse_webhook_json_payload(request)
         merged = _merge_ghl_booking_payload_top_level(payload)
         _merge_ghl_contact_profile_into_merged(payload, merged)
+        _normalize_flat_ghl_identity_into_merged(merged)
         cal = payload.get("calendar") if isinstance(payload.get("calendar"), dict) else {}
 
         quote_url = _quote_submission_url_from_payload(payload) or _quote_submission_url_from_merged(merged)
