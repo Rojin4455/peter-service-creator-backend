@@ -7,8 +7,10 @@ import re
 import uuid
 from datetime import timedelta
 from datetime import timezone as dt_timezone
+from decimal import Decimal
 
 from decouple import config
+from django.db.models import Sum
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from rest_framework import status
@@ -16,7 +18,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
-from quote_app.models import CustomerSubmission
+from quote_app.models import CustomerPackageQuote, CustomerSubmission
 
 from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
 from .models import GhlAppointmentJobberJobMap
@@ -728,6 +730,68 @@ def _coerce_stringly_json_payload(payload):
                 cal[subk] = inner
 
 
+def _derived_quote_total_from_submission(submission):
+    """
+    Effective quote total for Jobber when `submission.final_total` is still 0 (common before admin
+    approval): sum selection line totals, then selected package quotes, then rollups / original total.
+    """
+    try:
+        ft = float(submission.final_total)
+        if ft > 0:
+            return ft
+    except (TypeError, ValueError):
+        pass
+    agg = submission.customerserviceselection_set.aggregate(s=Sum("final_total_price"))
+    val = agg.get("s")
+    if val is not None:
+        try:
+            f = float(val)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            pass
+    total = Decimal("0")
+    for sel in submission.customerserviceselection_set.filter(selected_package__isnull=False).only(
+        "id", "selected_package_id"
+    ):
+        pq = (
+            CustomerPackageQuote.objects.filter(
+                service_selection_id=sel.id,
+                package_id=sel.selected_package_id,
+                is_selected=True,
+            )
+            .only("total_price", "admin_override_price")
+            .first()
+        )
+        if pq is None:
+            continue
+        ep = pq.admin_override_price if pq.admin_override_price is not None else pq.total_price
+        if ep is not None:
+            total += ep
+    if total > 0:
+        return float(total)
+    orig = getattr(submission, "original_final_total", None)
+    if orig is not None:
+        try:
+            o = float(orig)
+            if o > 0:
+                return o
+        except (TypeError, ValueError):
+            pass
+    try:
+        roll = (
+            float(submission.total_base_price or 0)
+            + float(submission.total_adjustments or 0)
+            + float(submission.total_surcharges or 0)
+            + float(getattr(submission, "total_addons_price", None) or 0)
+        )
+        if roll > 0:
+            return roll
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _merged_ghl_quote_price(merged):
     """First positive price from GHL flat merge fields (workflow sends hundreds of keys)."""
     if not isinstance(merged, dict):
@@ -772,6 +836,7 @@ def _normalize_flat_ghl_identity_into_merged(merged):
 
 def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg):
     """Structured diagnostics for 400 responses (visible in GHL workflow execution)."""
+    derived_db = _derived_quote_total_from_submission(submission) if submission is not None else None
     cal = payload.get("calendar") if isinstance(payload, dict) else None
     cal_ok = isinstance(cal, dict)
     appt = ""
@@ -795,12 +860,13 @@ def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg)
             ft = float(submission.final_total)
         except (TypeError, ValueError):
             ft = None
-        if ft is None or ft <= 0:
+        if (ft is None or ft <= 0) and (derived_db is None or derived_db <= 0):
             qp = _merged_ghl_quote_price(m)
             if qp is None or qp <= 0:
                 hints.append(
-                    "submission.final_total is 0 and merged Quote Value / Total Price is empty or zero — "
-                    "set an approved total on the quote or sync Quote Value on the GHL contact."
+                    "No positive price: submission.final_total is 0, no sum from service lines / "
+                    "package quotes / rollups, and GHL Quote Value is empty — complete package pricing "
+                    "on the quote or set Quote Value on the contact."
                 )
         if not (fn and ln):
             hints.append("Missing first_name/last_name (add firstName/lastName or first_name/last_name to payload).")
@@ -817,6 +883,7 @@ def _ghl_booking_failure_detail(submission, merged, payload, quote_url, cid_dbg)
         "merged_has_first_last": bool(fn and ln),
         "merged_has_email_or_phone": bool(em or ph),
         "submission_final_total": float(submission.final_total) if submission is not None else None,
+        "derived_total_from_db": derived_db,
         "merged_quote_value_raw": m.get("Quote Value"),
         "merged_ghl_price_parsed": _merged_ghl_quote_price(m),
         "payload_key_count": len(payload) if isinstance(payload, dict) else 0,
@@ -1107,10 +1174,7 @@ def _job_detail_dict_from_submission_and_ghl(submission, merged):
         "special_instructions": special,
         "entry_instructions": entry,
     }
-    try:
-        pfloat = float(submission.final_total)
-    except (TypeError, ValueError):
-        pfloat = None
+    pfloat = _derived_quote_total_from_submission(submission)
     service_guess = (pick("Type of Service") or "") or ""
     if not service_guess and submission.customerserviceselection_set.exists():
         service_guess = submission.customerserviceselection_set.select_related("service").first().service.name
@@ -1168,6 +1232,25 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
         try:
             line_price = float(sel.final_total_price)
         except (TypeError, ValueError):
+            line_price = 0.0
+        if line_price <= 0:
+            pq = (
+                CustomerPackageQuote.objects.filter(
+                    service_selection_id=sel.id,
+                    package_id=pkg.id,
+                    is_selected=True,
+                )
+                .only("total_price", "admin_override_price")
+                .first()
+            )
+            if pq is not None:
+                ep = pq.admin_override_price if pq.admin_override_price is not None else pq.total_price
+                if ep is not None:
+                    try:
+                        line_price = float(ep)
+                    except (TypeError, ValueError):
+                        line_price = 0.0
+        if line_price <= 0:
             continue
         services_rows.append(
             {
@@ -1184,10 +1267,7 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
         if selections:
             sp = selections[0].selected_package
             pkg_name = sp.name if sp else ""
-        try:
-            sub_total = float(submission.final_total)
-        except (TypeError, ValueError):
-            sub_total = None
+        sub_total = _derived_quote_total_from_submission(submission)
         if types and sub_total is not None and sub_total > 0:
             data = {
                 "first_name": first_name,
