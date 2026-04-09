@@ -684,30 +684,48 @@ def _quote_url_from_attribution(payload):
 
 def _coerce_stringly_json_payload(payload):
     """
-    GHL sometimes sends customData or body as a JSON **string**. DRF/request.data can also flatten
-    nested objects incorrectly. Parse those strings so quote URL / ids are visible as real dicts.
+    GHL sometimes sends nested objects as JSON **strings** (customData, calendar, contact, body).
+    Until parsed, `payload.get("calendar")` is not a dict and quote URL / appointmentId are invisible.
     """
     if not isinstance(payload, dict):
         return
-    for key in ("customData", "custom_data"):
-        v = payload.get(key)
-        if isinstance(v, str):
-            s = v.strip()
-            if s.startswith("{") or s.startswith("["):
-                try:
-                    parsed = json.loads(s)
-                    if isinstance(parsed, dict):
-                        payload[key] = parsed
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    pass
-    b = payload.get("body")
-    if isinstance(b, str) and b.strip().startswith("{"):
+
+    def _parse_obj_str(val):
+        if not isinstance(val, str):
+            return None
+        s = val.strip()
+        if not s.startswith("{"):
+            return None
         try:
-            inner = json.loads(b.strip())
-            if isinstance(inner, dict):
-                payload["body"] = inner
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, dict) else None
         except (json.JSONDecodeError, TypeError, ValueError):
-            pass
+            return None
+
+    for key in (
+        "customData",
+        "custom_data",
+        "calendar",
+        "contact",
+        "appointment",
+        "booking",
+        "body",
+        "triggerData",
+        "meta",
+        "payload",
+    ):
+        v = payload.get(key)
+        inner = _parse_obj_str(v)
+        if inner is not None:
+            payload[key] = inner
+
+    cal = payload.get("calendar")
+    if isinstance(cal, dict):
+        for subk in ("contact", "appointment", "booking"):
+            sv = cal.get(subk)
+            inner = _parse_obj_str(sv)
+            if inner is not None:
+                cal[subk] = inner
 
 
 def _merge_ghl_booking_payload_top_level(payload):
@@ -890,8 +908,17 @@ def _quote_submission_url_from_payload(payload):
 
 
 def _quote_submission_url_from_merged(merged):
-    """Legacy helper: quote URL from an already-merged dict only."""
-    return _first_http_quote_url_from_dict(merged if isinstance(merged, dict) else {})
+    """
+    Quote / booking URL from the flat merged dict.
+
+    GHL often sends hundreds of top-level custom field keys; the URL may appear under a known key
+    or as any string value starting with http (same as _quote_submission_url_from_payload scan).
+    """
+    m = merged if isinstance(merged, dict) else {}
+    url = _first_http_quote_url_from_dict(m)
+    if url:
+        return url
+    return _http_quote_url_from_dict_values(m)
 
 
 def _parse_multi_value_field(val):
@@ -1493,6 +1520,9 @@ class GhlBookingWebhookDebugView(APIView):
         preview_len = max(500, min(preview_len, 50000))
         raw_preview = raw.decode("utf-8", errors="replace")[:preview_len]
 
+        def _type_name(x):
+            return type(x).__name__ if x is not None else "null"
+
         return Response(
             {
                 "debug": True,
@@ -1501,6 +1531,9 @@ class GhlBookingWebhookDebugView(APIView):
                 "raw_body_bytes": len(raw),
                 "raw_body_preview": raw_preview,
                 "parse_hint": parse_note,
+                "payload_key_count": len(payload) if isinstance(payload, dict) else 0,
+                "calendar_type_after_parse": _type_name(payload.get("calendar")),
+                "customData_type_after_parse": _type_name(payload.get("customData")),
                 "payload_top_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
                 "customData": cd_out,
                 "calendar_keys": sorted(cal.keys()) if isinstance(cal, dict) else None,
