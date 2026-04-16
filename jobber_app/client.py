@@ -829,9 +829,20 @@ def create_client_note(client_id, message):
     msg = str(message or "").strip()
     if not msg:
         return False, "message is required"
+    # Without linkedTo, Jobber treats client notes as linked to related requests/quotes/jobs/invoices.
+    # GHL-forwarded CRM notes should stay on the client profile only.
+    note_input = {
+        "message": msg[:15000],
+        "linkedTo": {
+            "requests": False,
+            "quotes": False,
+            "jobs": False,
+            "invoices": False,
+        },
+    }
     data, err = _request(
         MUTATION_CLIENT_CREATE_NOTE,
-        {"clientId": client_id, "input": {"message": msg[:15000]}},
+        {"clientId": client_id, "input": note_input},
     )
     if err:
         return False, err
