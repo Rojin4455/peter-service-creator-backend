@@ -1100,12 +1100,11 @@ class SubmitServiceResponsesView(APIView):
                 ).select_related('sub_question', 'package')
             }
         
-        # Check if there's a measurement question in the responses
-        measurement_question_response = None
-        for qr in question_responses:
-            if qr.question.question_type == 'measurement':
-                measurement_question_response = qr
-                break
+        # All measurement-type questions (sum each; previously only the first was used)
+        measurement_question_responses = [
+            qr for qr in question_responses
+            if qr.question.question_type == 'measurement'
+        ]
         
         # Generate quotes for each package
         for package in packages:
@@ -1114,13 +1113,13 @@ class SubmitServiceResponsesView(APIView):
             # Get package-specific sqft price from pre-fetched dict
             sqft_price = sqft_mappings.get(package.id, Decimal('0.00'))
             
-            # Calculate measurement total if measurement question exists
+            # Sum measurement totals across every measurement question for this package
             measurement_total = Decimal('0.00')
-            if measurement_question_response:
-                measurement_total = self._calculate_measurement_question_adjustment(
-                    measurement_question_response, package
-                )
-                print(f"[DEBUG] Measurement question found for package {package.name} - measurement_total: {measurement_total}, base_price: {base_price}")
+            for mqr in measurement_question_responses:
+                row_total = self._calculate_measurement_question_adjustment(mqr, package)
+                measurement_total += row_total
+            if measurement_question_responses:
+                print(f"[DEBUG] Measurement questions ({len(measurement_question_responses)}) for package {package.name} - measurement_total: {measurement_total}, base_price: {base_price}")
             
             # Calculate OTHER question adjustments (excluding measurement questions)
             # Filter out measurement questions from adjustments calculation
