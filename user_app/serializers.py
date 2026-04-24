@@ -56,13 +56,13 @@ class ServiceListSerializer(serializers.ModelSerializer):
     """Simplified serializer for listing services without packages"""
     class Meta:
         model = Service
-        fields = ['id', 'name', 'description', 'order']
+        fields = ['id', 'name', 'description', 'order', 'icon_url']
 
 
 class QuestionOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuestionOption
-        fields = ['id', 'option_text', 'order', 'icon_url']
+        fields = ['id', 'option_text', 'order']
 
 
 class QuestionOptionWithPricingSerializer(serializers.ModelSerializer):
