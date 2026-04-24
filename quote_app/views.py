@@ -530,20 +530,22 @@ class SubmitServiceResponsesView(APIView):
             processed_sub_questions = set()
             
             for sub_answer in sub_question_answers:
-                if sub_answer.get('answer') is True:
-                    sub_question_id = sub_answer['sub_question_id']
-                    
-                    if sub_question_id in processed_sub_questions:
-                        continue
-                    processed_sub_questions.add(sub_question_id)
-                    
-                    sub_question = get_object_or_404(SubQuestion, id=sub_question_id)
-                    
-                    CustomerSubQuestionResponse.objects.create(
-                        question_response=question_response,
-                        sub_question=sub_question,
-                        answer=True
-                    )
+                answer = sub_answer.get('answer')
+                if answer is not True and answer is not False:
+                    continue
+                sub_question_id = sub_answer['sub_question_id']
+                
+                if sub_question_id in processed_sub_questions:
+                    continue
+                processed_sub_questions.add(sub_question_id)
+                
+                sub_question = get_object_or_404(SubQuestion, id=sub_question_id)
+                
+                CustomerSubQuestionResponse.objects.create(
+                    question_response=question_response,
+                    sub_question=sub_question,
+                    answer=answer
+                )
     
     def _calculate_question_adjustment_for_averaging(self, question, response_data, question_response, service_selection):
         """Calculate average adjustment across packages (for display only)"""
