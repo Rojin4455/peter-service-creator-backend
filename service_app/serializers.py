@@ -477,17 +477,19 @@ class ServiceSerializer(serializers.ModelSerializer):
     questions = serializers.SerializerMethodField(read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
     settings = ServiceSettingsSerializer(read_only=True)
-    icon_clear = serializers.BooleanField(write_only=True, required=False, default=False)
+    # `icon` in JSON is the GHL / media URL; stored as icon_url
+    icon = serializers.CharField(source='icon_url', read_only=True, allow_null=True)
+    icon_file_id = serializers.CharField(read_only=True, allow_null=True, required=False)
 
     class Meta:
         model = Service
         fields = [
             'id', 'name', 'description', 'is_active', 'order',
             'created_at', 'updated_at', 'created_by', 'created_by_name', 'image', 'icon',
-            'icon_clear', 'questions', 'packages', 'features', 'settings',
+            'icon_file_id', 'questions', 'packages', 'features', 'settings',
             'is_commercial', 'is_residential', 'is_enable_dollar_minimum',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'icon', 'icon_file_id']
 
     def get_questions(self, obj):
         """Get only root questions (non-conditional ones)"""
@@ -497,29 +499,10 @@ class ServiceSerializer(serializers.ModelSerializer):
         return QuestionSerializer(root_questions, many=True, context=self.context).data
 
     def create(self, validated_data):
-        validated_data.pop('icon_clear', None)
         request = self.context.get('request')
         if request and hasattr(request, 'user'):
             validated_data['created_by'] = request.user
         return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        icon_clear = validated_data.pop('icon_clear', False)
-        new_icon = validated_data.get('icon')
-        if new_icon is not None:
-            if instance.icon and getattr(instance.icon, 'name', None):
-                try:
-                    instance.icon.delete(save=False)
-                except Exception:
-                    pass
-        elif icon_clear:
-            if instance.icon and getattr(instance.icon, 'name', None):
-                try:
-                    instance.icon.delete(save=False)
-                except Exception:
-                    pass
-            validated_data['icon'] = None
-        return super().update(instance, validated_data)
 
 class ServiceListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for Service list view"""
@@ -527,10 +510,11 @@ class ServiceListSerializer(serializers.ModelSerializer):
     # features_count = serializers.IntegerField(source='features.count', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    icon = serializers.CharField(source='icon_url', read_only=True, allow_null=True)
 
     class Meta:
         model = Service
-        fields = "__all__" 
+        exclude = ['icon_url'] 
 
 
 # Nested serializers for complex operations

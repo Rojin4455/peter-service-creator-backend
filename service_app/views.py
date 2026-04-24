@@ -244,6 +244,68 @@ class ServiceDetailView(generics.RetrieveUpdateDestroyAPIView):
         instance.delete()
 
 
+class ServiceIconUploadView(APIView):
+    """
+    Upload service icon to GHL media (same pattern as quote images).
+    Stores URL and file id on Service — no local FileField.
+    """
+    permission_classes = [IsAdminPermission]
+
+    def post(self, request, pk):
+        from accounts.models import GHLAuthCredentials
+        from quote_app.helpers import delete_file_from_ghl_media, upload_file_to_ghl_media
+
+        service = get_object_or_404(Service, pk=pk)
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            return Response(
+                {"error": "No file provided. Send multipart/form-data with key 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        credentials = GHLAuthCredentials.objects.first()
+        if not credentials or not credentials.location_id:
+            return Response(
+                {"error": "GHL credentials or location ID not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        location_id = credentials.location_id
+        if service.icon_file_id:
+            delete_file_from_ghl_media(service.icon_file_id, location_id)
+        result = upload_file_to_ghl_media(uploaded_file, location_id)
+        if not result:
+            return Response(
+                {"error": "Failed to upload file to media storage."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        service.icon_url = result.get("url") or None
+        service.icon_file_id = result.get("fileId") or None
+        service.save(update_fields=["icon_url", "icon_file_id", "updated_at"])
+        return Response(
+            ServiceSerializer(service, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class ServiceIconDeleteView(APIView):
+    """Remove service icon from GHL media and clear URL on Service."""
+    permission_classes = [IsAdminPermission]
+
+    def delete(self, request, pk):
+        from accounts.models import GHLAuthCredentials
+        from quote_app.helpers import delete_file_from_ghl_media
+
+        service = get_object_or_404(Service, pk=pk)
+        credentials = GHLAuthCredentials.objects.first()
+        location_id = credentials.location_id if credentials else None
+        if service.icon_file_id and location_id:
+            delete_file_from_ghl_media(service.icon_file_id, location_id)
+        service.icon_url = None
+        service.icon_file_id = None
+        service.save(update_fields=["icon_url", "icon_file_id", "updated_at"])
+        return Response(
+            ServiceSerializer(service, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 # Package Views
