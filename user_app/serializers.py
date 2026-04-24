@@ -62,7 +62,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
 class QuestionOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuestionOption
-        fields = ['id', 'option_text', 'order']
+        fields = ['id', 'option_text', 'order', 'icon_url']
 
 
 class QuestionOptionWithPricingSerializer(serializers.ModelSerializer):
