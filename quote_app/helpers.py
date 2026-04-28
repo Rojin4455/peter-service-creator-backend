@@ -6,6 +6,17 @@ from decouple import config
 # Quote status tags in GHL - only one of these should be on the contact at a time
 QUOTE_STATUS_TAGS = ("quote drafted", "quote_requested", "quote_accepted")
 BID_IN_PERSON_TAG = "bid in person"
+GHL_BOOKING_LINK_FIELD_ID = "vWNjYOQajJAPtx2Hkq2e"
+
+
+def _submission_booking_custom_fields(submission):
+    """Public booking URL for GHL custom field (QUOTE_PUBLIC_BASE_URL + /booking?submission_id=...)."""
+    public_quote_base_url = config(
+        "QUOTE_PUBLIC_BASE_URL",
+        default="https://site.cleanonthego.com",
+    ).rstrip("/")
+    booking_url = f"{public_quote_base_url}/booking?submission_id={submission.id}"
+    return [{"id": GHL_BOOKING_LINK_FIELD_ID, "field_value": booking_url}]
 
 
 def _get_ghl_contact_results(submission, credentials, headers, location_id):
@@ -85,7 +96,10 @@ def sync_ghl_contact_tags_for_submission_status(submission):
             updated_tags = list(tags_without_status)
         if getattr(submission, "is_bid_in_person", False):
             updated_tags = list(set(updated_tags + [BID_IN_PERSON_TAG]))
-        contact_payload = {"tags": updated_tags}
+        contact_payload = {
+            "tags": updated_tags,
+            "customFields": _submission_booking_custom_fields(submission),
+        }
         resp = requests.put(
             f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
             json=contact_payload,
@@ -151,31 +165,31 @@ def add_quote_drafted_tag_to_ghl(submission):
                     elif "contact" in search_data and isinstance(search_data["contact"], dict):
                         results = [search_data["contact"]]
 
-        # Update or create contact with "quote drafted" tag
+        booking_cf = _submission_booking_custom_fields(submission)
+
+        # Update or create contact with "quote drafted" tag + booking link custom field
         if results:
             ghl_contact_id = results[0]["id"]
             existing_tags = results[0].get("tags", [])
             if isinstance(existing_tags, str):
                 existing_tags = [existing_tags]
-            
-            # Add "quote drafted" tag if not already present
-            if "quote drafted" not in existing_tags:
-                updated_tags = list(set(existing_tags + ["quote drafted"]))
-                
-                contact_payload = {
-                    "tags": updated_tags
-                }
-                
-                contact_response = requests.put(
-                    f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
-                    json=contact_payload,
-                    headers=headers
-                )
-                
-                if contact_response.status_code in [200, 201]:
-                    submission.ghl_contact_id = ghl_contact_id
-                    submission.save()
-                    print(f"Added 'quote drafted' tag to contact: {ghl_contact_id}")
+
+            updated_tags = list(set(existing_tags + ["quote drafted"]))
+            contact_payload = {
+                "tags": updated_tags,
+                "customFields": booking_cf,
+            }
+
+            contact_response = requests.put(
+                f"https://services.leadconnectorhq.com/contacts/{ghl_contact_id}",
+                json=contact_payload,
+                headers=headers
+            )
+
+            if contact_response.status_code in [200, 201]:
+                submission.ghl_contact_id = ghl_contact_id
+                submission.save()
+                print(f"Synced 'quote drafted' tag and booking link on contact: {ghl_contact_id}")
         else:
             # No existing contact found, create new one with "quote drafted" tag
             contact_payload = {
@@ -185,7 +199,8 @@ def add_quote_drafted_tag_to_ghl(submission):
                 "phone": submission.customer_phone,
                 "address1": submission.street_address,
                 "locationId": location_id,
-                "tags": ["quote drafted"]
+                "tags": ["quote drafted"],
+                "customFields": booking_cf,
             }
             
             contact_response = requests.post(
@@ -213,21 +228,23 @@ def add_quote_drafted_tag_to_ghl(submission):
                             existing_tags = fetch_response.json().get("contact", {}).get("tags", [])
                             if isinstance(existing_tags, str):
                                 existing_tags = [existing_tags]
-                            
-                            if "quote drafted" not in existing_tags:
-                                updated_tags = list(set(existing_tags + ["quote drafted"]))
-                                update_payload = {"tags": updated_tags}
-                                
-                                update_response = requests.put(
-                                    f"https://services.leadconnectorhq.com/contacts/{contact_id_from_error}",
-                                    json=update_payload,
-                                    headers=headers
-                                )
-                                
-                                if update_response.status_code in [200, 201]:
-                                    submission.ghl_contact_id = contact_id_from_error
-                                    submission.save()
-                                    print(f"Added 'quote drafted' tag to existing contact: {contact_id_from_error}")
+
+                            updated_tags = list(set(existing_tags + ["quote drafted"]))
+                            update_payload = {
+                                "tags": updated_tags,
+                                "customFields": booking_cf,
+                            }
+
+                            update_response = requests.put(
+                                f"https://services.leadconnectorhq.com/contacts/{contact_id_from_error}",
+                                json=update_payload,
+                                headers=headers
+                            )
+
+                            if update_response.status_code in [200, 201]:
+                                submission.ghl_contact_id = contact_id_from_error
+                                submission.save()
+                                print(f"Synced 'quote drafted' tag and booking link on duplicate contact: {contact_id_from_error}")
 
     except Exception as e:
         print(f"Error adding 'quote drafted' tag to GHL: {e}")
@@ -293,15 +310,8 @@ def create_or_update_ghl_contact(submission, is_submit=False, is_declined=False)
 
         # --- Build custom fields payload ---
         # Booking/Quote link
-        public_quote_base_url = config(
-            "QUOTE_PUBLIC_BASE_URL",
-            default="https://site.cleanonthego.com",
-        ).rstrip("/")
-        booking_url = f"{public_quote_base_url}/booking?submission_id={submission.id}"
-        custom_fields = [{
-            "id": "vWNjYOQajJAPtx2Hkq2e",
-            "field_value": booking_url
-        }]
+        custom_fields = _submission_booking_custom_fields(submission)
+        booking_url = custom_fields[0]["field_value"]
 
         submission.quote_url = booking_url
         submission.save()
