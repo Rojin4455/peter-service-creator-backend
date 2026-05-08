@@ -469,13 +469,27 @@ def create_job(
     if not property_id:
         return None, "property_id is required (get it from get_client_properties(client_id))"
 
+    def _format_line_item_description(raw):
+        """
+        Normalize detail text to one item per line.
+        Accepts either newline-delimited or semicolon-delimited source content.
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "\n" in text:
+            parts = [p.strip() for p in text.splitlines() if p.strip()]
+        else:
+            parts = [p.strip() for p in text.split(";") if p.strip()]
+        return "\n".join(parts)
+
     built_line_items = []
     if line_items:
         for li in line_items:
             if not isinstance(li, dict):
                 return None, "Each line_items entry must be an object"
             name = (li.get("name") or "").strip() or "Service"
-            desc = (li.get("description") or "").strip()
+            desc = _format_line_item_description(li.get("description"))
             try:
                 up = float(li.get("unit_price"))
             except (TypeError, ValueError):
@@ -507,7 +521,7 @@ def create_job(
         built_line_items = [
             {
                 "name": line_item_name or "Service",
-                "description": line_item_description or "",
+                "description": _format_line_item_description(line_item_description),
                 "unitPrice": round(price_float, 2),
                 "quantity": 1,
                 "category": "SERVICE",

@@ -283,26 +283,121 @@ class JobberCreateJobView(APIView):
 
 def _build_booking_job_notes(data):
     """Build job notes string from booking job details (per integration doc)."""
-    parts = []
+    intro = []
+    specs = []
     if data.get("bedrooms") is not None:
-        parts.append(f"Bedrooms: {data.get('bedrooms')}")
+        specs.append(f"Bedrooms: {data.get('bedrooms')}")
     if data.get("bathrooms") is not None:
-        parts.append(f"Bathrooms: {data.get('bathrooms')}")
+        specs.append(f"Bathrooms: {data.get('bathrooms')}")
     if data.get("square_footage"):
-        parts.append(f"Square footage: {data.get('square_footage')}")
+        specs.append(f"Square footage: {data.get('square_footage')}")
     if data.get("condition"):
-        parts.append(f"Condition: {data.get('condition')}")
+        specs.append(f"Condition: {data.get('condition')}")
     if data.get("pets"):
-        parts.append(f"Pets: {data.get('pets')}")
+        specs.append(f"Pets: {data.get('pets')}")
     if data.get("add_ons"):
-        parts.append(f"Add-ons: {data.get('add_ons')}")
+        specs.append(f"Add-ons: {data.get('add_ons')}")
     if data.get("special_instructions"):
-        parts.append(f"Special requests: {data.get('special_instructions')}")
+        specs.append(f"Special requests: {data.get('special_instructions')}")
     if data.get("entry_instructions"):
-        parts.append(f"Entry instructions: {data.get('entry_instructions')}")
+        specs.append(f"Entry instructions: {data.get('entry_instructions')}")
     if data.get("estimated_labor_hours") is not None:
-        parts.append(f"Estimated labor hours: {data.get('estimated_labor_hours')}")
+        intro.append(f"Estimated labor hours: {data.get('estimated_labor_hours')}")
+    extra_specs = data.get("question_specs")
+    if isinstance(extra_specs, list):
+        for line in extra_specs:
+            s = str(line).strip()
+            if s:
+                specs.append(s)
+    elif extra_specs not in (None, ""):
+        specs.append(str(extra_specs).strip())
+
+    parts = []
+    if intro:
+        parts.extend(intro)
+    if specs:
+        if parts:
+            parts.append("")
+        parts.append("Job specs:")
+        for s in specs:
+            parts.append(f"- {s}")
     return "\n".join(parts) if parts else None
+
+
+def _submission_question_specs(submission):
+    """
+    Build "Question: Answer" lines from structured submission responses so Jobber notes
+    include the full spec sheet (bedrooms/bathrooms and other answered questions).
+    """
+    if not submission:
+        return []
+
+    specs = []
+    selections = submission.customerserviceselection_set.prefetch_related(
+        "question_responses__question",
+        "question_responses__option_responses__option",
+        "question_responses__sub_question_responses__sub_question",
+        "question_responses__measurement_responses__option",
+    )
+
+    for sel in selections:
+        qrs = list(sel.question_responses.all())
+        # Preserve form order first, fallback to creation order.
+        qrs.sort(key=lambda qr: (getattr(qr.question, "order", 0), getattr(qr, "created_at", None)))
+        for qr in qrs:
+            qtxt = (getattr(qr.question, "question_text", "") or "").strip()
+            if not qtxt:
+                continue
+
+            answers = []
+            if qr.text_answer and str(qr.text_answer).strip():
+                answers.append(str(qr.text_answer).strip())
+            if qr.yes_no_answer is not None:
+                answers.append("Yes" if qr.yes_no_answer else "No")
+
+            option_bits = []
+            for orow in qr.option_responses.all():
+                otxt = (getattr(orow.option, "option_text", "") or "").strip()
+                if not otxt:
+                    continue
+                qty = getattr(orow, "quantity", 1) or 1
+                try:
+                    qty_i = int(qty)
+                except (TypeError, ValueError):
+                    qty_i = 1
+                option_bits.append(f"{otxt} x{qty_i}" if qty_i > 1 else otxt)
+            if option_bits:
+                answers.append(", ".join(option_bits))
+
+            sub_bits = []
+            for srow in qr.sub_question_responses.all():
+                sqtxt = (getattr(srow.sub_question, "sub_question_text", "") or "").strip()
+                if not sqtxt:
+                    continue
+                sub_bits.append(f"{sqtxt}: {'Yes' if srow.answer else 'No'}")
+            if sub_bits:
+                answers.append("; ".join(sub_bits))
+
+            m_bits = []
+            for mrow in qr.measurement_responses.all():
+                otxt = (getattr(mrow.option, "option_text", "") or "").strip() or "Measurement"
+                m_bits.append(f"{otxt} {mrow.length}x{mrow.width} x{mrow.quantity}")
+            if m_bits:
+                answers.append("; ".join(m_bits))
+
+            if not answers:
+                continue
+            specs.append(f"{qtxt}: {' | '.join(answers)}")
+
+    # Keep order while removing duplicates.
+    seen = set()
+    out = []
+    for s in specs:
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
 
 
 def _compute_labor_and_slot(price, service_type="", team_size=2):
@@ -373,18 +468,21 @@ def _normalize_booking_services(data):
     if isinstance(raw_services, list) and len(raw_services) > 0:
         line_items = []
         titles = []
+        package_titles = []
         for row in raw_services:
             if not isinstance(row, dict):
                 return None, None, "Each services[] entry must be an object"
             st = (row.get("service_type") or row.get("title") or "").strip()
             pkg = (row.get("package_title") or row.get("line_item_name") or data.get("package_title") or "").strip()
+            if pkg:
+                package_titles.append(pkg)
             desc = (row.get("package_description") or row.get("line_item_description") or data.get("package_description") or "").strip()
             line_price = row.get("line_item_price") if row.get("line_item_price") is not None else row.get("price")
             if st:
                 titles.append(st)
             name = pkg or st or "Service"
             if st and pkg and pkg.lower() != st.lower():
-                name = f"{pkg} — {st}"
+                name = f"{st} - {pkg}"
             elif st and not pkg:
                 name = st
             if line_price is None:
@@ -395,6 +493,17 @@ def _normalize_booking_services(data):
                 return None, None, "services[] line_item_price must be numeric"
             line_items.append({"name": name, "description": desc, "unit_price": float(line_price), "quantity": 1})
         job_title = ", ".join(titles) if titles else (data.get("service_type") or "Multi-service")
+        unique_pkgs = []
+        seen_pkgs = set()
+        for p in package_titles:
+            pl = p.lower()
+            if pl in seen_pkgs:
+                continue
+            seen_pkgs.add(pl)
+            unique_pkgs.append(p)
+        if unique_pkgs:
+            pkg_suffix = unique_pkgs[0] if len(unique_pkgs) == 1 else " + ".join(unique_pkgs)
+            job_title = f"{job_title} — {pkg_suffix}"
         return job_title, line_items, None
 
     # List of service type labels + shared package / total price
@@ -422,9 +531,11 @@ def _normalize_booking_services(data):
         line_items = []
         for i, st in enumerate(types_clean):
             price = remainder if i == n - 1 else share
-            name = f"{pkg} ({st})" if pkg else st
+            name = f"{st} - {pkg}" if pkg else st
             line_items.append({"name": name, "description": desc, "unit_price": price, "quantity": 1})
         job_title = ", ".join(types_clean)
+        if pkg:
+            job_title = f"{job_title} — {pkg}"
         return job_title, line_items, None
 
     # Single legacy field
@@ -440,7 +551,8 @@ def _normalize_booking_services(data):
     except (TypeError, ValueError):
         return None, None, "approved_price must be a number"
     line_items = [{"name": pkg or service_type, "description": desc, "unit_price": float(approved), "quantity": 1}]
-    return service_type, line_items, None
+    job_title = f"{service_type} — {pkg}" if pkg else service_type
+    return job_title, line_items, None
 
 
 def _booking_confirm_payload_dict(raw):
@@ -1185,13 +1297,20 @@ def _package_feature_description(package):
     if not package:
         return ""
     lines = []
-    qs = package.package_features.select_related("feature").filter(is_included=True).order_by("feature__name")
+    # Keep package feature insertion order so Jobber line item details match
+    # the order configured in the package editor.
+    qs = (
+        package.package_features
+        .select_related("feature")
+        .filter(is_included=True)
+        .order_by("created_at", "id")
+    )
     for pf in qs:
         nm = (pf.feature.name or "").strip()
         if nm:
             lines.append(nm)
     if lines:
-        return "; ".join(lines)
+        return "\n".join(lines)
     svc = getattr(package, "service", None)
     return (getattr(svc, "description", None) or "").strip()
 
@@ -1266,6 +1385,9 @@ def _job_detail_dict_from_submission_and_ghl(submission, merged):
         low, high, _slot = _compute_labor_and_slot(pfloat, service_type=service_guess, team_size=2)
         if low is not None and high is not None:
             out["estimated_labor_hours"] = f"{low}–{high} (team slot from booking rules)"
+    question_specs = _submission_question_specs(submission)
+    if question_specs:
+        out["question_specs"] = question_specs
     return {k: v for k, v in out.items() if v not in (None, "", [])}
 
 
