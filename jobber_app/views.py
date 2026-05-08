@@ -461,6 +461,14 @@ def _normalize_booking_services(data):
     Returns (job_title, line_items_list, error_message_or_None).
     line_items_list items: {name, description, unit_price, quantity?}.
     """
+    def _line_item_name(service_label, package_label):
+        """Jobber line-item title: service first, package after (never package-only when both exist)."""
+        st = (service_label or "").strip()
+        pk = (package_label or "").strip()
+        if st and pk and st.lower() != pk.lower():
+            return f"{st} — {pk}"
+        return st or pk or "Service"
+
     approved = data.get("approved_price") if data.get("approved_price") is not None else data.get("line_item_price")
 
     # Structured multi-service rows
@@ -472,7 +480,12 @@ def _normalize_booking_services(data):
         for row in raw_services:
             if not isinstance(row, dict):
                 return None, None, "Each services[] entry must be an object"
-            st = (row.get("service_type") or row.get("title") or "").strip()
+            st = (
+                row.get("service_type")
+                or row.get("service_name")
+                or row.get("title")
+                or ""
+            ).strip()
             pkg = (row.get("package_title") or row.get("line_item_name") or data.get("package_title") or "").strip()
             if pkg:
                 package_titles.append(pkg)
@@ -480,11 +493,7 @@ def _normalize_booking_services(data):
             line_price = row.get("line_item_price") if row.get("line_item_price") is not None else row.get("price")
             if st:
                 titles.append(st)
-            name = pkg or st or "Service"
-            if st and pkg and pkg.lower() != st.lower():
-                name = f"{st} - {pkg}"
-            elif st and not pkg:
-                name = st
+            name = _line_item_name(st, pkg)
             if line_price is None:
                 return None, None, "Each services[] entry must include line_item_price or price when using services[]"
             try:
@@ -531,7 +540,7 @@ def _normalize_booking_services(data):
         line_items = []
         for i, st in enumerate(types_clean):
             price = remainder if i == n - 1 else share
-            name = f"{st} - {pkg}" if pkg else st
+            name = _line_item_name(st, pkg)
             line_items.append({"name": name, "description": desc, "unit_price": price, "quantity": 1})
         job_title = ", ".join(types_clean)
         if pkg:
@@ -539,7 +548,9 @@ def _normalize_booking_services(data):
         return job_title, line_items, None
 
     # Single legacy field
-    service_type = (data.get("service_type") or data.get("title") or "").strip()
+    service_type = (
+        data.get("service_type") or data.get("service_name") or data.get("title") or ""
+    ).strip()
     if not service_type:
         return None, None, None
     if approved is None:
@@ -550,7 +561,14 @@ def _normalize_booking_services(data):
         float(approved)
     except (TypeError, ValueError):
         return None, None, "approved_price must be a number"
-    line_items = [{"name": pkg or service_type, "description": desc, "unit_price": float(approved), "quantity": 1}]
+    line_items = [
+        {
+            "name": _line_item_name(service_type, pkg),
+            "description": desc,
+            "unit_price": float(approved),
+            "quantity": 1,
+        }
+    ]
     job_title = f"{service_type} — {pkg}" if pkg else service_type
     return job_title, line_items, None
 
