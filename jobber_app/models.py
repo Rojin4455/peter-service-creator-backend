@@ -70,6 +70,29 @@ class JobberGhlNoteForward(models.Model):
         return f"GHL note {self.ghl_note_id} → Jobber {self.jobber_client_id}"
 
 
+class GhlContactJobberClientMap(models.Model):
+    """
+    Maps a GHL contact to a Jobber client after contact sync (create-if-missing).
+    Prevents duplicate Jobber clients on webhook retries.
+    """
+
+    ghl_contact_id = models.CharField(max_length=128, unique=True, db_index=True)
+    jobber_client_id = models.CharField(max_length=255, db_index=True)
+    client_created = models.BooleanField(
+        default=False,
+        help_text="True when this sync created the Jobber client (vs found existing).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ghl_contact_jobber_client_map"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"GHL {self.ghl_contact_id} → Jobber {self.jobber_client_id}"
+
+
 class GhlAppointmentJobberJobMap(models.Model):
     """
     Idempotency: one Jobber job per GHL calendar appointment when booking webhook runs

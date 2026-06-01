@@ -28,6 +28,7 @@ from .sync_ghl_calendar import (
     sync_jobber_visit_to_ghl_blocks,
     sync_jobber_visits_to_ghl_blocks,
 )
+from .contact_sync import sync_ghl_contact_to_jobber
 from .note_sync import sync_ghl_note_to_jobber
 from .tag_sync import sync_ghl_contact_tags_to_jobber, sync_jobber_client_tags_to_ghl
 
@@ -2320,6 +2321,40 @@ def _extract_ghl_webhook_tags(data):
         if isinstance(c, dict):
             tags = c.get("tags")
     return tags if isinstance(tags, list) else None
+
+
+class GhlContactSyncWebhookView(APIView):
+    """
+    POST — Ensure a GHL contact has a matching Jobber client (create if missing).
+
+    Configure one GHL workflow with trigger Contact Created or Contact Updated
+    (both events can use this same URL). Payload must include contactId (or nested contact.id).
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        data = _parse_webhook_json_payload(request)
+        contact_id = _extract_ghl_webhook_contact_id(data)
+        if not contact_id:
+            logger.warning(
+                "GHL contact-sync webhook missing contactId; keys=%s",
+                sorted(data.keys()) if isinstance(data, dict) else [],
+            )
+            return Response({"error": "contactId required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = sync_ghl_contact_to_jobber(ghl_contact_id=str(contact_id))
+        status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
+        if status_code != status.HTTP_200_OK:
+            logger.warning(
+                "GHL contact sync failed contactId=%s error=%s",
+                contact_id,
+                result.get("error"),
+            )
+        return Response(
+            {"received": True, "contactId": str(contact_id), "contact_sync": result},
+            status=status_code,
+        )
 
 
 class GhlContactTagsWebhookView(APIView):
