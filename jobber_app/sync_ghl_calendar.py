@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_TITLE_PREFIX = "Jobber"
 
 
+def is_jobber_ghl_calendar_block_sync_enabled():
+    """
+    When False, Jobber visits are not pushed to GHL block slots (GHL-only availability).
+    Set JOBBER_GHL_CALENDAR_BLOCK_SYNC_ENABLED=false in environment.
+    """
+    raw = config("JOBBER_GHL_CALENDAR_BLOCK_SYNC_ENABLED", default="true").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _disabled_sync_stats():
+    stats = _base_stats()
+    stats["disabled"] = True
+    stats["skipped"] = 1
+    return stats
+
+
 def _extract_ghl_event_id(data):
     """Parse event id from various possible GHL response shapes."""
     if not data or not isinstance(data, dict):
@@ -131,6 +147,8 @@ def sync_jobber_visits_to_ghl_blocks(after_iso, before_iso):
 
     Returns dict: { created, updated, deleted, skipped, errors: [...] }
     """
+    if not is_jobber_ghl_calendar_block_sync_enabled():
+        return _disabled_sync_stats()
     location_id, calendar_id, err_stats = _get_ghl_sync_target()
     if err_stats:
         return err_stats
@@ -177,6 +195,8 @@ def sync_jobber_job_to_ghl_blocks(job_id):
     Sync visits for a single Jobber job to GHL block slots.
     Intended for JOB_CREATE webhook handling.
     """
+    if not is_jobber_ghl_calendar_block_sync_enabled():
+        return _disabled_sync_stats()
     location_id, calendar_id, err_stats = _get_ghl_sync_target()
     if err_stats:
         return err_stats
@@ -195,6 +215,8 @@ def sync_jobber_visit_to_ghl_blocks(visit_id):
     Sync one Jobber visit to a GHL block slot.
     Intended for VISIT_CREATE webhook handling.
     """
+    if not is_jobber_ghl_calendar_block_sync_enabled():
+        return _disabled_sync_stats()
     location_id, calendar_id, err_stats = _get_ghl_sync_target()
     if err_stats:
         return err_stats
@@ -224,6 +246,8 @@ def delete_jobber_visit_from_ghl_blocks(visit_id):
     Delete one Jobber visit mapping from GHL block slots.
     Intended for VISIT_DESTROY webhook handling.
     """
+    if not is_jobber_ghl_calendar_block_sync_enabled():
+        return _disabled_sync_stats()
     stats = _base_stats()
     row = JobberVisitGhlBlockMap.objects.filter(jobber_visit_id=str(visit_id)).first()
     if not row:

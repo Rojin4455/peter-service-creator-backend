@@ -1973,6 +1973,8 @@ class GhlCalendarSyncFromJobberView(APIView):
     POST — Pull Jobber visits for a time window and upsert GoHighLevel calendar **block slots**
     so the embedded booking calendar reflects Jobber busy times.
 
+    Disabled when JOBBER_GHL_CALENDAR_BLOCK_SYNC_ENABLED=false (GHL-only booking calendar).
+
     Auth: set GHL_CALENDAR_SYNC_SECRET in env and send header X-GHL-Calendar-Sync-Secret,
     **or** call as an authenticated admin (is_admin).
 
@@ -2092,9 +2094,11 @@ class JobberWebhookView(APIView):
     POST — Receive Jobber webhook events.
     Core behavior:
       - CLIENT_CREATE / CLIENT_UPDATE: sync client tags → GHL contact tags
-      - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots
-      - VISIT_DESTROY: delete mapped GHL block slot
-      - JOB_CREATE: sync that job's visits to GHL block slots (fallback)
+      - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots (if block sync enabled)
+      - VISIT_DESTROY: delete mapped GHL block slot (if block sync enabled)
+      - JOB_CREATE: sync that job's visits to GHL block slots (fallback, if enabled)
+
+    Visit → GHL block sync is skipped when JOBBER_GHL_CALENDAR_BLOCK_SYNC_ENABLED=false.
     """
     permission_classes = [AllowAny]
 
