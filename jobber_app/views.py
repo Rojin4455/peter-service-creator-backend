@@ -2329,6 +2329,9 @@ class GhlContactSyncWebhookView(APIView):
 
     Configure one GHL workflow with trigger Contact Created or Contact Updated
     (both events can use this same URL). Payload must include contactId (or nested contact.id).
+
+    Also creates a Jobber property when GHL has address1, city, state, and postal code
+    and the client has no property yet (including on Contact Changed when address appears).
     """
 
     permission_classes = [AllowAny]

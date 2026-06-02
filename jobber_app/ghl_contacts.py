@@ -166,6 +166,47 @@ def find_ghl_contact_for_jobber_client(client_dict, location_id):
     return None, None
 
 
+def ghl_contact_service_address(contact):
+    """
+    Service address from a GHL contact dict.
+    Returns a dict with street1, street2, city, province, postal_code when all required
+    fields are present; otherwise None.
+    """
+    if not isinstance(contact, dict):
+        return None
+    street1 = (
+        contact.get("address1")
+        or contact.get("streetAddress")
+        or contact.get("street_address")
+        or ""
+    )
+    street1 = str(street1).strip()
+    street2 = str(contact.get("address2") or contact.get("street2") or "").strip() or None
+    city = str(contact.get("city") or "").strip()
+    province = str(
+        contact.get("state")
+        or contact.get("province")
+        or contact.get("region")
+        or ""
+    ).strip()
+    postal_code = str(
+        contact.get("postalCode")
+        or contact.get("postal_code")
+        or contact.get("zip")
+        or contact.get("zipCode")
+        or ""
+    ).strip()
+    if not street1 or not city or not province or not postal_code:
+        return None
+    return {
+        "street1": street1,
+        "street2": street2,
+        "city": city,
+        "province": province,
+        "postal_code": postal_code,
+    }
+
+
 def ghl_contact_email_and_phone(contact):
     """
     Primary email/phone from a LeadConnector contact dict (handles common alternate fields).
