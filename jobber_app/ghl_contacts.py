@@ -5,6 +5,7 @@ Docs: https://marketplace.gohighlevel.com/docs/ghl/contacts/contacts-api
 Uses same auth pattern as ghl_calendar_client / quote_app.helpers.
 """
 import logging
+import re
 from urllib.parse import quote
 
 import requests
@@ -166,14 +167,114 @@ def find_ghl_contact_for_jobber_client(client_dict, location_id):
     return None, None
 
 
-def ghl_contact_service_address(contact):
+_CANADIAN_POSTAL_RE = re.compile(
+    r"^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$",
+    re.IGNORECASE,
+)
+_US_ZIP_RE = re.compile(r"^\d{5}(?:-\d{4})?$")
+
+
+def _normalize_postal_code(postal_code):
+    pc = str(postal_code or "").strip().upper()
+    compact = re.sub(r"\s+", "", pc)
+    m = re.match(r"^([A-Z]\d[A-Z])(\d[A-Z]\d)$", compact)
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+    return pc
+
+
+def _looks_like_postal_code(value):
+    pc = _normalize_postal_code(value)
+    compact = re.sub(r"\s+", "", pc)
+    return bool(_CANADIAN_POSTAL_RE.match(compact) or _US_ZIP_RE.match(compact))
+
+
+_COUNTRY_SUFFIX_RE = re.compile(
+    r",\s*(Canada|USA|United States(?: of America)?|U\.?S\.?A\.?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_trailing_country(line):
+    """GHL often appends ', Canada' to address1 even when city/state/postal are empty."""
+    s = str(line or "").strip()
+    prev = None
+    while s and s != prev:
+        prev = s
+        s = _COUNTRY_SUFFIX_RE.sub("", s).strip()
+    return s
+
+
+def parse_combined_address_line(full_line):
     """
-    Service address from a GHL contact dict.
-    Returns a dict with street1, street2, city, province, postal_code when all required
-    fields are present; otherwise None.
+    Parse a single-line address when GHL stores everything in street address, e.g.:
+      '74 Rue Mayfair, Hudson, QC J0P 1H0'
+      '74 Rue Mayfair, Hudson, QC J0P 1H0, Canada'
+      '123 Main St, Austin, TX 78701'
+      '123 Main, Suite 2, Austin, TX, 78701'
+    Returns dict with street1, city, province, postal_code or None.
     """
-    if not isinstance(contact, dict):
+    line = _strip_trailing_country(full_line)
+    if not line or "," not in line:
         return None
+
+    # street, city, PROV POSTAL  (most common in CA/US)
+    m = re.match(
+        r"^(.+?),\s*([^,]+?),\s*([A-Za-z]{2})\s+([A-Za-z0-9][A-Za-z0-9 -]{2,})$",
+        line,
+        re.IGNORECASE,
+    )
+    if m:
+        street1, city, province, postal = (s.strip() for s in m.groups())
+        postal = _normalize_postal_code(postal)
+        if _looks_like_postal_code(postal):
+            return {
+                "street1": street1,
+                "street2": None,
+                "city": city,
+                "province": province.upper(),
+                "postal_code": postal,
+            }
+
+    parts = [p.strip() for p in line.split(",") if p.strip()]
+    if len(parts) >= 4:
+        postal = _normalize_postal_code(parts[-1])
+        province = parts[-2]
+        city = parts[-3]
+        street1 = ", ".join(parts[:-3])
+        if street1 and city and province and _looks_like_postal_code(postal):
+            return {
+                "street1": street1,
+                "street2": None,
+                "city": city,
+                "province": province.upper() if len(province) == 2 else province,
+                "postal_code": postal,
+            }
+
+    # street, 'City PROV POSTAL'
+    if len(parts) == 2:
+        m2 = re.match(
+            r"^(.+?)\s+([A-Za-z]{2})\s+([A-Za-z0-9][A-Za-z0-9 -]{2,})$",
+            parts[1],
+            re.IGNORECASE,
+        )
+        if m2:
+            city, province, postal = (s.strip() for s in m2.groups())
+            postal = _normalize_postal_code(postal)
+            if _looks_like_postal_code(postal):
+                return {
+                    "street1": parts[0],
+                    "street2": None,
+                    "city": city,
+                    "province": province.upper(),
+                    "postal_code": postal,
+                }
+
+    return None
+
+
+def _structured_address_fields(contact):
+    """Raw address parts from a GHL contact dict (may be incomplete)."""
     street1 = (
         contact.get("address1")
         or contact.get("streetAddress")
@@ -196,15 +297,57 @@ def ghl_contact_service_address(contact):
         or contact.get("zipCode")
         or ""
     ).strip()
-    if not street1 or not city or not province or not postal_code:
+    return street1, street2, city, province, postal_code
+
+
+def ghl_contact_service_address(contact):
+    """
+    Service address from a GHL contact dict.
+    Uses separate city/state/postal fields when present; otherwise parses a combined
+    street line like '74 Rue Mayfair, Hudson, QC J0P 1H0'.
+    Returns dict with street1, street2, city, province, postal_code or None.
+    """
+    if not isinstance(contact, dict):
         return None
-    return {
-        "street1": street1,
-        "street2": street2,
-        "city": city,
-        "province": province,
-        "postal_code": postal_code,
-    }
+
+    street1, street2, city, province, postal_code = _structured_address_fields(contact)
+
+    if street1 and city and province and postal_code:
+        return {
+            "street1": street1,
+            "street2": street2,
+            "city": city,
+            "province": province.upper() if len(province) == 2 else province,
+            "postal_code": _normalize_postal_code(postal_code),
+        }
+
+    combined_candidates = []
+    for key in ("address1", "streetAddress", "street_address", "full_address", "fullAddress"):
+        val = str(contact.get(key) or "").strip()
+        if val and val not in combined_candidates:
+            combined_candidates.append(val)
+
+    parsed = None
+    for candidate in combined_candidates:
+        parsed = parse_combined_address_line(candidate)
+        if parsed:
+            break
+
+    if not parsed:
+        return None
+
+    if street2:
+        parsed["street2"] = street2
+    if city:
+        parsed["city"] = city
+    if province:
+        parsed["province"] = province.upper() if len(province) == 2 else province
+    if postal_code:
+        parsed["postal_code"] = _normalize_postal_code(postal_code)
+
+    if parsed.get("street1") and parsed.get("city") and parsed.get("province") and parsed.get("postal_code"):
+        return parsed
+    return None
 
 
 def ghl_contact_email_and_phone(contact):
