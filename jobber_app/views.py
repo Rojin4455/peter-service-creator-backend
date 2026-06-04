@@ -20,7 +20,23 @@ from rest_framework.permissions import AllowAny
 
 from quote_app.models import CustomerPackageQuote, CustomerSubmission
 
-from .client import search_clients, create_client, get_visits, create_job, get_client_properties, create_property_for_client
+from .booking_schedule import (
+    booking_window_from_payload,
+    calendar_window_from_ghl,
+    format_jobber_iso_timestamp,
+    resolve_booking_window,
+)
+from .client import (
+    search_clients,
+    create_client,
+    get_visits,
+    create_job,
+    create_job_visit,
+    edit_job_visit,
+    get_client_properties,
+    create_property_for_client,
+    get_job_visits,
+)
 from .models import GhlAppointmentJobberJobMap
 from .sync_ghl_calendar import (
     delete_jobber_visit_from_ghl_blocks,
@@ -40,8 +56,24 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _enrich_booking_data_from_calendar(data, calendar_obj):
+    """Attach GHL calendar timezone and end time for visit scheduling."""
+    if not isinstance(data, dict):
+        return data
+    cal_start, cal_end, cal_tz = calendar_window_from_ghl(calendar_obj)
+    if cal_tz and not data.get("calendar_timezone"):
+        data["calendar_timezone"] = cal_tz
+    if cal_end and not data.get("scheduled_end_iso"):
+        data["scheduled_end_iso"] = cal_end
+    if cal_start and not data.get("scheduled_start_iso"):
+        data["scheduled_start_iso"] = cal_start
+    return data
+
+
 def _ghl_calendar_map_defaults_from_cal(cal):
     """Build GhlAppointmentJobberJobMap time fields from workflow `calendar` JSON."""
+    from .booking_schedule import parse_booking_instant
+
     defaults = {
         "raw_start_time_iso": "",
         "raw_end_time_iso": "",
@@ -61,24 +93,8 @@ def _ghl_calendar_map_defaults_from_cal(cal):
     if tz_name:
         defaults["calendar_timezone"] = tz_name[:128]
 
-    def _to_utc(s):
-        if not s:
-            return None
-        dt = parse_datetime(str(s).strip().replace("Z", "+00:00"))
-        if dt is None:
-            return None
-        if timezone.is_naive(dt):
-            if tz_name and ZoneInfo is not None:
-                try:
-                    dt = timezone.make_aware(dt, ZoneInfo(tz_name))
-                except Exception:
-                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
-            else:
-                dt = timezone.make_aware(dt, dt_timezone.utc)
-        return dt.astimezone(dt_timezone.utc)
-
-    defaults["booking_start_at"] = _to_utc(start_raw)
-    defaults["booking_end_at"] = _to_utc(end_raw)
+    defaults["booking_start_at"] = parse_booking_instant(start_raw, tz_name or None)
+    defaults["booking_end_at"] = parse_booking_instant(end_raw, tz_name or None)
     return defaults
 
 
@@ -448,6 +464,83 @@ def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
     return f"{date_str}T{time_str}"
 
 
+def _schedule_visit_for_booking(job, data, calendar_obj=None):
+    """
+    Create a fully scheduled Jobber visit (start + end) after jobCreate.
+    Returns dict with visit info or error/skipped reason.
+    """
+    job_id = (job or {}).get("id")
+    if not job_id:
+        return {"scheduled": False, "skipped": True, "reason": "no_job_id"}
+
+    window_kwargs = booking_window_from_payload(data, calendar_obj)
+    start_utc, end_utc, slot_hours, tz_name = resolve_booking_window(
+        **window_kwargs,
+        compute_slot_fn=_compute_labor_and_slot,
+    )
+    if start_utc is None:
+        return {"scheduled": False, "skipped": True, "reason": "no_scheduled_start"}
+
+    start_ts = format_jobber_iso_timestamp(start_utc)
+    end_ts = format_jobber_iso_timestamp(end_utc)
+    title = (data.get("visit_title") or data.get("service_type") or (job or {}).get("title") or "Service visit").strip()
+    instructions = (data.get("visit_instructions") or "").strip() or None
+
+    existing, err = get_job_visits(job_id)
+    if err:
+        logger.warning("Could not list visits for job %s before visitCreate: %s", job_id, err)
+        existing = []
+    else:
+        for v in existing or []:
+            if v.get("startAt") and v.get("endAt"):
+                return {
+                    "scheduled": False,
+                    "skipped": True,
+                    "reason": "visit_already_scheduled",
+                    "existing_visit_id": v.get("id"),
+                    "existing_start_at": v.get("startAt"),
+                    "existing_end_at": v.get("endAt"),
+                }
+
+    unscheduled = [
+        v
+        for v in (existing or [])
+        if v.get("id") and (not v.get("startAt") or not v.get("endAt"))
+    ]
+    if len(unscheduled) == 1:
+        visit, verr = edit_job_visit(
+            unscheduled[0]["id"],
+            start_ts,
+            end_ts,
+            title=title,
+            instructions=instructions,
+        )
+        action = "visit_edit"
+    else:
+        visit, verr = create_job_visit(
+            job_id,
+            start_ts,
+            end_ts,
+            title=title,
+            instructions=instructions,
+        )
+        action = "visit_create"
+    if verr:
+        return {"scheduled": False, "error": verr}
+
+    return {
+        "scheduled": True,
+        "action": action,
+        "visit": visit,
+        "timezone": tz_name,
+        "slot_duration_hours": slot_hours,
+        "start_at_jobber": start_ts,
+        "end_at_jobber": end_ts,
+        "start_at_utc": start_utc.isoformat(),
+        "end_at_utc": end_utc.isoformat(),
+    }
+
+
 def _normalize_booking_services(data):
     """
     Build job title and line_items for Jobber from booking payload.
@@ -591,10 +684,11 @@ def _booking_confirm_payload_dict(raw):
         return {}
 
 
-def execute_booking_confirm(data):
+def execute_booking_confirm(data, calendar_obj=None):
     """
-    Find or create Jobber client → resolve or create property → create job.
+    Find or create Jobber client → resolve or create property → create job → schedule visit.
     `data` uses the same shape as BookingConfirmView POST JSON.
+    `calendar_obj`: optional GHL workflow `calendar` dict for timezone-aware start/end.
 
     Returns:
         (result_dict, None) on success.
@@ -697,12 +791,15 @@ def execute_booking_confirm(data):
     if err:
         return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
 
+    visit_schedule = _schedule_visit_for_booking(job, data, calendar_obj)
+
     return (
         {
             "client_id": client_id,
             "client_created": client_created,
             "property_id": prop_id,
             "job": job,
+            "visit_schedule": visit_schedule,
         },
         None,
     )
@@ -1803,6 +1900,7 @@ class GhlBookingConfirmedWebhookView(APIView):
             booking_data = _booking_confirm_dict_from_submission(submission, merged, cal)
         else:
             booking_data = _booking_confirm_dict_from_ghl_only(merged, cal)
+        booking_data = _enrich_booking_data_from_calendar(booking_data, cal)
 
         if not booking_data:
             cid_dbg = _extract_ghl_webhook_contact_id(payload)
@@ -1824,12 +1922,13 @@ class GhlBookingConfirmedWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        result, err_resp = execute_booking_confirm(booking_data)
+        result, err_resp = execute_booking_confirm(booking_data, calendar_obj=cal)
         if err_resp is not None:
             return err_resp
 
         job = (result or {}).get("job") or {}
         jobber_id = job.get("id")
+        visit_schedule = (result or {}).get("visit_schedule")
         if appt_id and jobber_id:
             sid = submission.id if submission is not None else None
             time_defaults = _ghl_calendar_map_defaults_from_cal(cal)
@@ -1842,7 +1941,153 @@ class GhlBookingConfirmedWebhookView(APIView):
                 },
             )
 
-        return Response({"received": True, **(result or {})}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"received": True, "visit_schedule": visit_schedule, **(result or {})},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+def _booking_map_to_dict(row):
+    """Serialize GhlAppointmentJobberJobMap for API responses."""
+    if not row:
+        return None
+    return {
+        "submission_id": str(row.submission_id) if row.submission_id else None,
+        "ghl_appointment_id": row.ghl_appointment_id,
+        "jobber_job_id": row.jobber_job_id,
+        "timezone": row.calendar_timezone or None,
+        "booking_start_at": row.booking_start_at.isoformat() if row.booking_start_at else None,
+        "booking_end_at": row.booking_end_at.isoformat() if row.booking_end_at else None,
+        "start_time_raw": row.raw_start_time_iso or None,
+        "end_time_raw": row.raw_end_time_iso or None,
+        "confirmed_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+class JobberBookingLookupView(APIView):
+    """
+    GET — Look up Jobber job ID and booking times (no Django admin required).
+
+    Provide **one** query parameter:
+      - submission_id — quote submission UUID (from booking URL ?submission_id=...)
+      - ghl_appointment_id — GHL calendar appointment id
+      - email — customer email (latest booking for that contact)
+      - jobber_job_id — reverse lookup by Jobber job encoded id
+
+    Example: GET /api/jobber/booking/lookup/?submission_id=<uuid>
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        submission_id = (request.query_params.get("submission_id") or "").strip()
+        ghl_appt = (request.query_params.get("ghl_appointment_id") or "").strip()
+        email = (request.query_params.get("email") or "").strip()
+        jobber_job_id = (request.query_params.get("jobber_job_id") or "").strip()
+
+        provided = sum(bool(x) for x in (submission_id, ghl_appt, email, jobber_job_id))
+        if provided != 1:
+            return Response(
+                {
+                    "error": "Provide exactly one of: submission_id, ghl_appointment_id, email, jobber_job_id",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        row = None
+        if submission_id:
+            try:
+                sid = uuid.UUID(submission_id)
+            except (TypeError, ValueError):
+                return Response({"error": "Invalid submission_id UUID"}, status=status.HTTP_400_BAD_REQUEST)
+            row = GhlAppointmentJobberJobMap.latest_for_submission(sid)
+        elif ghl_appt:
+            row = GhlAppointmentJobberJobMap.objects.filter(ghl_appointment_id=ghl_appt).first()
+        elif jobber_job_id:
+            row = (
+                GhlAppointmentJobberJobMap.objects.filter(jobber_job_id=jobber_job_id)
+                .order_by("-created_at")
+                .first()
+            )
+        elif email:
+            from quote_app.models import CustomerSubmission
+
+            sub = (
+                CustomerSubmission.objects.filter(customer_email__iexact=email)
+                .order_by("-updated_at")
+                .first()
+            )
+            if sub:
+                row = GhlAppointmentJobberJobMap.latest_for_submission(sub.id)
+
+        if not row:
+            return Response(
+                {"found": False, "error": "No booking map row for that lookup"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response({"found": True, "booking": _booking_map_to_dict(row)}, status=status.HTTP_200_OK)
+
+
+class JobberScheduleVisitView(APIView):
+    """
+    POST — Schedule (or backfill) a timed visit on an existing Jobber job.
+
+    Use for jobs created before visit scheduling was enabled, or to fix a job the client flagged.
+
+    Body (JSON):
+      - job_id (required): Jobber job encoded ID (e.g. from GhlAppointmentJobberJobMap.jobber_job_id).
+      - scheduled_start_iso (required unless use_ghl_map=true): Start time from GHL/booking.
+      - scheduled_end_iso (optional): End time; else start + slot_duration_hours.
+      - calendar_timezone (optional): e.g. America/Toronto (default from JOBBER_BOOKING_TIMEZONE).
+      - slot_duration_hours (optional): Override; else computed from approved_price + service_type.
+      - approved_price, service_type, team_size (optional): For slot duration when end not provided.
+      - title, instructions (optional): Visit title / instructions.
+      - use_ghl_map (optional): If true, load start/end/timezone from GhlAppointmentJobberJobMap for this job_id.
+        When map has booking_start_at in DB, those UTC instants are used (most accurate).
+
+    GHL timestamps ending in Z are treated as local wall clock in calendar_timezone when
+    GHL_Z_SUFFIX_MEANS_LOCAL_WALL_CLOCK=true (default).
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        job_id = (request.data.get("job_id") or "").strip()
+        if not job_id:
+            return Response({"error": "job_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = dict(request.data) if isinstance(request.data, dict) else {}
+        use_map = bool(data.get("use_ghl_map"))
+
+        if use_map:
+            row = GhlAppointmentJobberJobMap.objects.filter(jobber_job_id=job_id).order_by("-created_at").first()
+            if not row:
+                return Response(
+                    {"error": f"No GhlAppointmentJobberJobMap row for job_id={job_id}"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            tz_name = (row.calendar_timezone or "").strip() or None
+            if row.booking_start_at:
+                data["scheduled_start_iso"] = row.booking_start_at.isoformat()
+            elif row.raw_start_time_iso:
+                data["scheduled_start_iso"] = row.raw_start_time_iso
+            if row.booking_end_at:
+                data["scheduled_end_iso"] = row.booking_end_at.isoformat()
+            elif row.raw_end_time_iso:
+                data["scheduled_end_iso"] = row.raw_end_time_iso
+            if tz_name:
+                data["calendar_timezone"] = tz_name
+            data["_from_ghl_map"] = True
+
+        fake_job = {"id": job_id, "title": data.get("title")}
+        visit_schedule = _schedule_visit_for_booking(fake_job, data, calendar_obj=None)
+        if data.get("_from_ghl_map"):
+            visit_schedule["source"] = "ghl_appointment_map"
+        if visit_schedule.get("error"):
+            return Response({"error": visit_schedule["error"]}, status=status.HTTP_502_BAD_GATEWAY)
+        code = status.HTTP_201_CREATED if visit_schedule.get("scheduled") else status.HTTP_200_OK
+        return Response(visit_schedule, status=code)
 
 
 def _ghl_booking_debug_shallow_dict(obj, max_keys=60, value_max_len=180):

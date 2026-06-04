@@ -570,6 +570,135 @@ def create_job(
     return job, None
 
 
+MUTATION_VISIT_CREATE = """
+mutation VisitCreate($jobId: EncodedId!, $visit: VisitCreateInput!) {
+  visitCreate(jobId: $jobId, visit: $visit) {
+    visit {
+      id
+      title
+      startAt
+      endAt
+      visitStatus
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def create_job_visit(
+    job_id,
+    start_iso_timestamp,
+    end_iso_timestamp,
+    *,
+    title=None,
+    instructions=None,
+):
+    """
+    Schedule a timed visit on an existing Jobber job (visitCreate).
+
+    start_iso_timestamp / end_iso_timestamp: ISO 8601 with offset (e.g. 2026-06-25T09:00:00-04:00).
+
+    Returns (visit dict or None, error_message).
+    """
+    if not job_id:
+        return None, "job_id is required"
+    if not start_iso_timestamp or not end_iso_timestamp:
+        return None, "start and end ISO timestamps are required"
+
+    visit_row = {
+        "schedule": {
+            "startAt": {"isoTimestamp": str(start_iso_timestamp)},
+            "endAt": {"isoTimestamp": str(end_iso_timestamp)},
+        },
+    }
+    if title:
+        visit_row["title"] = str(title)[:255]
+    if instructions:
+        visit_row["instructions"] = str(instructions)[:5000]
+
+    variables = {
+        "jobId": str(job_id),
+        "visit": {"visits": [visit_row]},
+    }
+    data, err = _request(MUTATION_VISIT_CREATE, variables)
+    if err:
+        return None, err
+    result = data.get("visitCreate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return None, msg
+    visit = result.get("visit")
+    if not visit:
+        return None, "No visit returned from Jobber visitCreate"
+    return visit, None
+
+
+MUTATION_VISIT_EDIT = """
+mutation VisitEdit($id: EncodedId!, $visit: VisitEditInput!) {
+  visitEdit(id: $id, visit: $visit) {
+    visit {
+      id
+      title
+      startAt
+      endAt
+      visitStatus
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+def edit_job_visit(
+    visit_id,
+    start_iso_timestamp,
+    end_iso_timestamp,
+    *,
+    title=None,
+    instructions=None,
+):
+    """Update an existing visit's schedule (visitEdit). Used when jobCreate left an unscheduled visit shell."""
+    if not visit_id:
+        return None, "visit_id is required"
+    if not start_iso_timestamp or not end_iso_timestamp:
+        return None, "start and end ISO timestamps are required"
+
+    visit_input = {
+        "schedule": {
+            "startAt": {"isoTimestamp": str(start_iso_timestamp)},
+            "endAt": {"isoTimestamp": str(end_iso_timestamp)},
+        },
+    }
+    if title:
+        visit_input["title"] = str(title)[:255]
+    if instructions:
+        visit_input["instructions"] = str(instructions)[:5000]
+
+    data, err = _request(
+        MUTATION_VISIT_EDIT,
+        {"id": str(visit_id), "visit": visit_input},
+    )
+    if err:
+        return None, err
+    result = data.get("visitEdit") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return None, msg
+    visit = result.get("visit")
+    if not visit:
+        return None, "No visit returned from Jobber visitEdit"
+    return visit, None
+
+
 # -----------------------------------------------------------------------------
 # Client tags (sync with GHL contact tags)
 # Jobber Tag type exposes `label` (not `name`) in current GraphQL API versions.
