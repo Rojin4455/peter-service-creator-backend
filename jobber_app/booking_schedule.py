@@ -83,7 +83,7 @@ def parse_booking_instant(iso_value, tz_name=None, *, z_suffix_means_local=None)
 
 
 def format_jobber_iso_timestamp(dt_utc):
-    """Format UTC instant for Jobber visitCreate schedule.isoTimestamp (with offset)."""
+    """Format UTC instant with local offset (logging / job timeframe)."""
     if dt_utc is None:
         return None
     if dt_utc.tzinfo is None:
@@ -96,6 +96,24 @@ def format_jobber_iso_timestamp(dt_utc):
         local = dt_utc.astimezone(zone)
         return local.isoformat(timespec="seconds")
     return dt_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def jobber_local_datetime_attrs(dt, tz_name=None):
+    """Jobber LocalDateTimeAttributes for visitCreate / visitEditSchedule."""
+    if dt is None:
+        return None
+    tz_name = (tz_name or default_booking_timezone()).strip()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=dt_timezone.utc)
+    else:
+        dt = dt.astimezone(dt_timezone.utc)
+    zone = _zone(tz_name)
+    local = dt.astimezone(zone) if zone is not None else dt
+    return {
+        "date": local.date().isoformat(),
+        "time": local.strftime("%H:%M:%S"),
+        "timezone": tz_name,
+    }
 
 
 def resolve_slot_duration_hours(

@@ -570,10 +570,27 @@ def create_job(
     return job, None
 
 
+def _parse_jobber_schedule_iso(start_iso_timestamp, end_iso_timestamp):
+    """Parse schedule instants from format_jobber_iso_timestamp output."""
+    from datetime import datetime
+
+    from jobber_app.booking_schedule import jobber_local_datetime_attrs
+
+    def _parse_one(value):
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    start_dt = _parse_one(start_iso_timestamp)
+    end_dt = _parse_one(end_iso_timestamp)
+    return {
+        "startAt": jobber_local_datetime_attrs(start_dt),
+        "endAt": jobber_local_datetime_attrs(end_dt),
+    }
+
+
 MUTATION_VISIT_CREATE = """
-mutation VisitCreate($jobId: EncodedId!, $visit: VisitCreateInput!) {
-  visitCreate(jobId: $jobId, visit: $visit) {
-    visit {
+mutation VisitCreate($jobId: EncodedId!, $input: VisitCreateInput!) {
+  visitCreate(jobId: $jobId, input: $input) {
+    createdVisits {
       id
       title
       startAt
@@ -609,12 +626,12 @@ def create_job_visit(
     if not start_iso_timestamp or not end_iso_timestamp:
         return None, "start and end ISO timestamps are required"
 
-    visit_row = {
-        "schedule": {
-            "startAt": {"isoTimestamp": str(start_iso_timestamp)},
-            "endAt": {"isoTimestamp": str(end_iso_timestamp)},
-        },
-    }
+    try:
+        schedule = _parse_jobber_schedule_iso(start_iso_timestamp, end_iso_timestamp)
+    except (TypeError, ValueError) as exc:
+        return None, f"Invalid visit schedule timestamps: {exc}"
+
+    visit_row = {"schedule": schedule}
     if title:
         visit_row["title"] = str(title)[:255]
     if instructions:
@@ -622,7 +639,7 @@ def create_job_visit(
 
     variables = {
         "jobId": str(job_id),
-        "visit": {"visits": [visit_row]},
+        "input": {"visits": [visit_row]},
     }
     data, err = _request(MUTATION_VISIT_CREATE, variables)
     if err:
@@ -632,21 +649,39 @@ def create_job_visit(
     if user_errors:
         msg = "; ".join([e.get("message", str(e)) for e in user_errors])
         return None, msg
-    visit = result.get("visit")
+    created = result.get("createdVisits") or []
+    visit = created[0] if created else None
     if not visit:
         return None, "No visit returned from Jobber visitCreate"
     return visit, None
 
 
-MUTATION_VISIT_EDIT = """
-mutation VisitEdit($id: EncodedId!, $visit: VisitEditInput!) {
-  visitEdit(id: $id, visit: $visit) {
+MUTATION_VISIT_EDIT_SCHEDULE = """
+mutation VisitEditSchedule($id: EncodedId!, $input: VisitEditScheduleInput!) {
+  visitEditSchedule(id: $id, input: $input) {
     visit {
       id
       title
       startAt
       endAt
       visitStatus
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+
+MUTATION_VISIT_EDIT = """
+mutation VisitEdit($id: EncodedId!, $attributes: VisitEditAttributes!) {
+  visitEdit(id: $id, attributes: $attributes) {
+    visit {
+      id
+      title
+      instructions
     }
     userErrors {
       message
@@ -665,37 +700,54 @@ def edit_job_visit(
     title=None,
     instructions=None,
 ):
-    """Update an existing visit's schedule (visitEdit). Used when jobCreate left an unscheduled visit shell."""
+    """Schedule an existing unscheduled visit shell (visitEditSchedule + optional visitEdit metadata)."""
     if not visit_id:
         return None, "visit_id is required"
     if not start_iso_timestamp or not end_iso_timestamp:
         return None, "start and end ISO timestamps are required"
 
-    visit_input = {
-        "schedule": {
-            "startAt": {"isoTimestamp": str(start_iso_timestamp)},
-            "endAt": {"isoTimestamp": str(end_iso_timestamp)},
-        },
-    }
-    if title:
-        visit_input["title"] = str(title)[:255]
-    if instructions:
-        visit_input["instructions"] = str(instructions)[:5000]
+    try:
+        schedule_input = _parse_jobber_schedule_iso(start_iso_timestamp, end_iso_timestamp)
+    except (TypeError, ValueError) as exc:
+        return None, f"Invalid visit schedule timestamps: {exc}"
 
     data, err = _request(
-        MUTATION_VISIT_EDIT,
-        {"id": str(visit_id), "visit": visit_input},
+        MUTATION_VISIT_EDIT_SCHEDULE,
+        {"id": str(visit_id), "input": schedule_input},
     )
     if err:
         return None, err
-    result = data.get("visitEdit") or {}
+    result = data.get("visitEditSchedule") or {}
     user_errors = result.get("userErrors") or []
     if user_errors:
         msg = "; ".join([e.get("message", str(e)) for e in user_errors])
         return None, msg
     visit = result.get("visit")
     if not visit:
-        return None, "No visit returned from Jobber visitEdit"
+        return None, "No visit returned from Jobber visitEditSchedule"
+
+    attrs = {}
+    if title:
+        attrs["title"] = str(title)[:255]
+    if instructions:
+        attrs["instructions"] = str(instructions)[:5000]
+    if attrs:
+        meta_data, meta_err = _request(
+            MUTATION_VISIT_EDIT,
+            {"id": str(visit_id), "attributes": attrs},
+        )
+        if meta_err:
+            return visit, None
+        meta_result = (meta_data or {}).get("visitEdit") or {}
+        meta_errors = meta_result.get("userErrors") or []
+        if meta_errors:
+            logger.warning(
+                "visitEdit metadata failed for visit %s: %s",
+                visit_id,
+                "; ".join(e.get("message", str(e)) for e in meta_errors),
+            )
+        elif meta_result.get("visit"):
+            visit = meta_result["visit"]
     return visit, None
 
 
