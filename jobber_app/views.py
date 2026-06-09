@@ -464,6 +464,63 @@ def _parse_booking_datetime(selected_date, selected_time, scheduled_start_iso):
     return f"{date_str}T{time_str}"
 
 
+def _resolve_visit_title(job, data):
+    """
+    Visit title should match the job title (service + package tier), not bare service_type.
+    E.g. "Move In/Out Cleaning — Detailed" rather than "Move In/Out Cleaning".
+    """
+    explicit = (data.get("visit_title") or "").strip()
+    if explicit:
+        return explicit
+    job_title = ((job or {}).get("title") or "").strip()
+    if job_title:
+        return job_title
+    computed_title, _, _ = _normalize_booking_services(data)
+    if computed_title:
+        return computed_title.strip()
+    return (
+        (data.get("service_type") or data.get("service_name") or "").strip()
+        or "Service visit"
+    )
+
+
+def _build_visit_instructions(data):
+    """Visit instructions for field team; includes estimated labor hours like job notes."""
+    parts = []
+    custom = (data.get("visit_instructions") or data.get("instructions") or "").strip()
+    if custom:
+        parts.append(custom)
+
+    labor = data.get("estimated_labor_hours")
+    if labor is None:
+        price = (
+            data.get("approved_price")
+            if data.get("approved_price") is not None
+            else data.get("line_item_price")
+        )
+        service_type = (data.get("service_type") or "").strip()
+        if not service_type and data.get("service_types"):
+            st = data.get("service_types")
+            if isinstance(st, list) and st:
+                service_type = str(st[0]).strip()
+        if price is not None:
+            try:
+                p = float(price)
+                if p > 0:
+                    low, high, _ = _compute_labor_and_slot(
+                        p, service_type=service_type, team_size=data.get("team_size", 2)
+                    )
+                    if low is not None and high is not None:
+                        labor = f"{low}–{high} (team slot from booking rules)"
+            except (TypeError, ValueError):
+                pass
+
+    if labor is not None:
+        parts.append(f"Estimated labor hours: {labor}")
+
+    return "\n".join(parts) if parts else None
+
+
 def _schedule_visit_for_booking(job, data, calendar_obj=None):
     """
     Create a fully scheduled Jobber visit (start + end) after jobCreate.
@@ -483,8 +540,8 @@ def _schedule_visit_for_booking(job, data, calendar_obj=None):
 
     start_ts = format_jobber_iso_timestamp(start_utc)
     end_ts = format_jobber_iso_timestamp(end_utc)
-    title = (data.get("visit_title") or data.get("service_type") or (job or {}).get("title") or "Service visit").strip()
-    instructions = (data.get("visit_instructions") or "").strip() or None
+    title = _resolve_visit_title(job, data)
+    instructions = _build_visit_instructions(data)
 
     existing, err = get_job_visits(job_id)
     if err:
