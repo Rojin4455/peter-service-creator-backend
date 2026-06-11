@@ -14,7 +14,8 @@ from decouple import config
 
 from quote_app.helpers import BID_IN_PERSON_TAG, QUOTE_STATUS_TAGS
 
-from .client import get_client_for_tag_sync, list_client_tag_names, search_clients, set_client_tags_by_names
+from .client import get_client_for_tag_sync, list_client_tag_names, set_client_tags_by_names
+from .jobber_client_resolve import resolve_jobber_client_for_ghl_contact
 from .ghl_contacts import (
     _get_credentials,
     _location_id,
@@ -169,16 +170,11 @@ def sync_ghl_contact_tags_to_jobber(ghl_contact_id, tag_names_from_payload=None)
     if not email and not phone:
         return {"ok": False, "error": "GHL contact has no email or phone to match Jobber client", "ghl_contact_id": ghl_contact_id}
 
-    search_term = email or phone
-    nodes, _, serr = search_clients(search_term, first=5)
-    if serr:
-        return {"ok": False, "error": serr, "ghl_contact_id": ghl_contact_id}
-    if not nodes:
-        return {"ok": False, "error": "No Jobber client found for this GHL contact email/phone", "ghl_contact_id": ghl_contact_id}
+    resolved = resolve_jobber_client_for_ghl_contact(ghl_contact_id, email, phone)
+    if not resolved.get("ok"):
+        return {"ok": False, "error": resolved.get("error"), "ghl_contact_id": ghl_contact_id}
 
-    jobber_client_id = nodes[0].get("id")
-    if not jobber_client_id:
-        return {"ok": False, "error": "Jobber search returned no id", "ghl_contact_id": ghl_contact_id}
+    jobber_client_id = resolved.get("jobber_client_id")
 
     st = _get_state(jobber_client_id)
     if st and st.last_sync_source == "jobber" and st.last_ghl_tag_signature == ghl_sig:

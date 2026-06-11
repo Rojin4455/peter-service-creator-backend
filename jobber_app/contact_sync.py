@@ -11,8 +11,8 @@ from .client import (
     create_client,
     create_property_for_client,
     get_client_properties,
-    search_clients,
 )
+from .jobber_client_resolve import resolve_jobber_client_for_ghl_contact
 from .ghl_contacts import (
     get_contact_by_id,
     ghl_contact_email_and_phone,
@@ -114,13 +114,17 @@ def _resolve_or_create_jobber_client(contact, *, ghl_contact_id, existing_map=No
             "ghl_contact_id": ghl_contact_id,
         }
 
-    search_term = email or phone
-    nodes, _, serr = search_clients(search_term, first=5)
-    if serr:
-        return None, False, {"ok": False, "error": serr, "ghl_contact_id": ghl_contact_id}
-
+    resolved = resolve_jobber_client_for_ghl_contact(ghl_contact_id, email, phone)
     client_created = False
-    jobber_client_id = nodes[0].get("id") if nodes else None
+    jobber_client_id = resolved.get("jobber_client_id") if resolved.get("ok") else None
+    if not resolved.get("ok"):
+        not_found = resolved.get("error") == "No Jobber client found for this GHL contact email/phone"
+        if not not_found:
+            return None, False, {
+                "ok": False,
+                "error": resolved.get("error"),
+                "ghl_contact_id": ghl_contact_id,
+            }
 
     if not jobber_client_id:
         client, cerr = create_client(first_name, last_name, email=email, phone=phone)

@@ -6,7 +6,8 @@ Idempotent via JobberGhlNoteForward (ghl_note_id unique).
 """
 import logging
 
-from .client import append_ghl_note_to_jobber_client, search_clients
+from .client import append_ghl_note_to_jobber_client
+from .jobber_client_resolve import resolve_jobber_client_for_ghl_contact
 from .ghl_contacts import (
     _get_credentials,
     _location_id,
@@ -176,31 +177,16 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
             "ghl_note_id": ghl_note_id,
         }
 
-    search_term = email or phone
-    nodes, _, serr = search_clients(search_term, first=5)
-    if serr:
+    resolved = resolve_jobber_client_for_ghl_contact(ghl_contact_id, email, phone)
+    if not resolved.get("ok"):
         return {
             "ok": False,
-            "error": serr,
-            "ghl_contact_id": ghl_contact_id,
-            "ghl_note_id": ghl_note_id,
-        }
-    if not nodes:
-        return {
-            "ok": False,
-            "error": "No Jobber client found for this GHL contact email/phone",
+            "error": resolved.get("error"),
             "ghl_contact_id": ghl_contact_id,
             "ghl_note_id": ghl_note_id,
         }
 
-    jobber_client_id = nodes[0].get("id")
-    if not jobber_client_id:
-        return {
-            "ok": False,
-            "error": "Jobber search returned no id",
-            "ghl_contact_id": ghl_contact_id,
-            "ghl_note_id": ghl_note_id,
-        }
+    jobber_client_id = resolved.get("jobber_client_id")
 
     ok, uerr, did_write = append_ghl_note_to_jobber_client(
         str(jobber_client_id),
@@ -235,6 +221,7 @@ def sync_ghl_note_to_jobber(*, ghl_contact_id, ghl_note_id, note_body=None):
         "ghl_contact_id": ghl_contact_id,
         "ghl_note_id": ghl_note_id,
         "jobber_client_id": str(jobber_client_id),
+        "match_source": resolved.get("match_source"),
         "written": did_write,
         "skipped_body_duplicate": not did_write,
     }
