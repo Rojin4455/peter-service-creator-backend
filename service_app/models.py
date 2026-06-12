@@ -688,9 +688,26 @@ class AddOnService(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
+    services = models.ManyToManyField(
+        Service,
+        blank=True,
+        related_name='addon_services',
+        help_text="If empty, this add-on is available for all services.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def is_global(self):
+        return not self.services.exists()
+
+    def is_available_for_services(self, service_ids):
+        if self.is_global:
+            return True
+        if not service_ids:
+            return False
+        return self.services.filter(id__in=service_ids).exists()
 
     def __str__(self):
         return self.name

@@ -7,7 +7,7 @@ from rest_framework.permissions import AllowAny
 from service_app.views import IsAdminPermission
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Sum, F, Count
 from decimal import Decimal
 from datetime import timedelta
 from django.utils import timezone
@@ -17,7 +17,6 @@ from service_app.models import (
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
     ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService,Coupon
 )
-from django.db.models import Sum
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
     CustomerOptionResponse, CustomerSubQuestionResponse, CustomerMeasurementResponse,
@@ -2711,9 +2710,31 @@ class ServicePackagesView(APIView):
 
 
 class AddOnServiceListView(generics.ListAPIView):
-    queryset = AddOnService.objects.all()
     serializer_class = AddOnServiceSerializer
     permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        from service_app.utils import filter_addons_for_services, get_submission_service_ids
+
+        queryset = AddOnService.objects.prefetch_related('services').annotate(
+            service_count=Count('services', distinct=True)
+        )
+
+        submission_id = self.request.query_params.get('submission_id')
+        service_ids_param = self.request.query_params.get('service_ids')
+
+        if submission_id:
+            submission = get_object_or_404(CustomerSubmission, id=submission_id)
+            service_ids = get_submission_service_ids(submission)
+            return filter_addons_for_services(queryset, service_ids)
+
+        if service_ids_param is not None:
+            service_ids = [
+                sid.strip() for sid in service_ids_param.split(',') if sid.strip()
+            ]
+            return filter_addons_for_services(queryset, service_ids)
+
+        return queryset
 
 
 # class AddAddOnsToSubmissionView(APIView):
@@ -2780,7 +2801,6 @@ class AddOnServiceListView(generics.ListAPIView):
 #             return Response({"error": str(e)}, status=400)
         
 
-from django.db.models import F
 class AddAddOnsToSubmissionView(APIView):
     permission_classes = [AllowAny]
 
@@ -2795,29 +2815,41 @@ class AddAddOnsToSubmissionView(APIView):
             ]
         }
         """
+        from service_app.utils import get_submission_service_ids
+
         addons_data = request.data.get("addons", [])
         if not addons_data:
             return Response({"error": "addons list is required"}, status=400)
 
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
-
-        total_addons_price = Decimal("0.00")
+        service_ids = get_submission_service_ids(submission)
 
         for item in addons_data:
             addon_id = item.get("addon_id")
             quantity = int(item.get("quantity", 1))
-            addon = get_object_or_404(AddOnService, id=addon_id)
+            addon = get_object_or_404(AddOnService.objects.prefetch_related('services'), id=addon_id)
 
-            submission_addon, created = SubmissionAddOn.objects.update_or_create(
+            if not addon.is_available_for_services(service_ids):
+                return Response(
+                    {
+                        "error": (
+                            f"Add-on '{addon.name}' is not available for the selected service(s)."
+                        )
+                    },
+                    status=400,
+                )
+
+            SubmissionAddOn.objects.update_or_create(
                 submission=submission,
                 addon=addon,
-                defaults={"quantity": quantity}
+                defaults={"quantity": quantity},
             )
 
-            total_addons_price += addon.base_price * quantity
+        total = SubmissionAddOn.objects.filter(submission=submission).aggregate(
+            total=Sum(F("addon__base_price") * F("quantity"))
+        )["total"] or Decimal("0.00")
 
-        # Update submission total
-        submission.total_addons_price = total_addons_price
+        submission.total_addons_price = total
         submission.save()
 
         serializer = SubmissionAddOnSerializer(submission.submission_addons.all(), many=True)

@@ -1280,7 +1280,9 @@ def addon_list_create(request):
     POST: Create a new AddOn
     """
     if request.method == "GET":
-        addons = AddOnService.objects.all().order_by("-created_at")
+        addons = AddOnService.objects.prefetch_related('services').annotate(
+            service_count=Count('services', distinct=True)
+        ).order_by("-created_at")
         serializer = AddOnServiceSerializer(addons, many=True)
         return Response(serializer.data)
 

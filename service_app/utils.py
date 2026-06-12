@@ -1,6 +1,30 @@
 from decimal import Decimal
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Iterable
+from uuid import UUID
+
+from django.db.models import Count, Q, QuerySet
+
 from .models import Package, Question, QuestionOption, QuestionPricing, OptionPricing, Location
+
+
+def filter_addons_for_services(queryset: QuerySet, service_ids: Iterable) -> QuerySet:
+    """
+    Return add-ons available for the given service IDs.
+    Add-ons with no linked services are global and always included.
+    """
+    service_ids = list(service_ids)
+    queryset = queryset.annotate(service_count=Count('services', distinct=True))
+    if not service_ids:
+        return queryset.filter(service_count=0)
+    return queryset.filter(
+        Q(service_count=0) | Q(services__id__in=service_ids)
+    ).distinct()
+
+
+def get_submission_service_ids(submission) -> List[UUID]:
+    return list(
+        submission.customerserviceselection_set.values_list('service_id', flat=True)
+    )
 
 class PricingCalculator:
     """Utility class for calculating pricing based on answers"""

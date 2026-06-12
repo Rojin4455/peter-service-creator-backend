@@ -205,9 +205,22 @@ class CustomerPackageQuoteSerializer(serializers.ModelSerializer):
         return FeaturePublicSerializer(features, many=True).data
 
 class AddOnServiceSerializer(serializers.ModelSerializer):
+    is_global = serializers.SerializerMethodField()
+    service_ids = serializers.SerializerMethodField()
+
     class Meta:
         model = AddOnService
-        fields = ["id", "name", "description", "base_price"]
+        fields = ["id", "name", "description", "base_price", "is_global", "service_ids"]
+
+    def get_is_global(self, obj):
+        if hasattr(obj, 'service_count'):
+            return obj.service_count == 0
+        return not obj.services.exists()
+
+    def get_service_ids(self, obj):
+        if self.get_is_global(obj):
+            return []
+        return list(obj.services.values_list('id', flat=True))
 
 
 class SubmissionAddOnSerializer(serializers.ModelSerializer):

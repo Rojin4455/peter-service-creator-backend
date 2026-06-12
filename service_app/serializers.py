@@ -911,9 +911,24 @@ class ServicePackageSizeMappingNewSerializer(serializers.ModelSerializer):
 
 
 class AddOnServiceSerializer(serializers.ModelSerializer):
+    services = serializers.PrimaryKeyRelatedField(
+        queryset=Service.objects.all(),
+        many=True,
+        required=False,
+    )
+    is_global = serializers.SerializerMethodField()
+
     class Meta:
         model = AddOnService
-        fields = ["id", "name", "description", "base_price", "created_at", "updated_at"]
+        fields = [
+            "id", "name", "description", "base_price",
+            "services", "is_global", "created_at", "updated_at",
+        ]
+
+    def get_is_global(self, obj):
+        if hasattr(obj, 'service_count'):
+            return obj.service_count == 0
+        return not obj.services.exists()
 
 
 class QuantityDiscountSerializer(serializers.ModelSerializer):
