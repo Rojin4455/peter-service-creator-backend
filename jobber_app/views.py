@@ -598,6 +598,129 @@ def _schedule_visit_for_booking(job, data, calendar_obj=None):
     }
 
 
+def _submission_addon_line_items(submission):
+    """Jobber line items for each add-on selected on a quote submission."""
+    if submission is None:
+        return []
+    items = []
+    for row in submission.submission_addons.select_related("addon").all():
+        addon = row.addon
+        try:
+            unit_price = float(addon.base_price)
+        except (TypeError, ValueError):
+            continue
+        qty = row.quantity or 1
+        try:
+            qty = max(1, int(qty))
+        except (TypeError, ValueError):
+            qty = 1
+        items.append(
+            {
+                "name": (addon.name or "Add-on").strip(),
+                "description": (addon.description or "").strip(),
+                "unit_price": unit_price,
+                "quantity": qty,
+            }
+        )
+    return items
+
+
+def _addon_line_items_total(items):
+    total = 0.0
+    for li in items or []:
+        try:
+            total += float(li.get("unit_price", 0)) * int(li.get("quantity", 1) or 1)
+        except (TypeError, ValueError):
+            pass
+    return round(total, 2)
+
+
+def _collect_addon_line_items(data):
+    """Normalize addon_line_items / addons from a booking payload."""
+    raw = data.get("addon_line_items")
+    if raw is None:
+        raw = data.get("addons")
+    if not isinstance(raw, list):
+        return []
+    items = []
+    for li in raw:
+        if not isinstance(li, dict):
+            continue
+        name = (li.get("name") or "").strip()
+        if not name:
+            continue
+        price_raw = li.get("unit_price")
+        if price_raw is None:
+            price_raw = li.get("price")
+        try:
+            unit_price = float(price_raw)
+        except (TypeError, ValueError):
+            continue
+        qty = li.get("quantity", 1)
+        try:
+            qty = max(1, int(qty))
+        except (TypeError, ValueError):
+            qty = 1
+        items.append(
+            {
+                "name": name,
+                "description": (li.get("description") or "").strip(),
+                "unit_price": unit_price,
+                "quantity": qty,
+            }
+        )
+    return items
+
+
+def _append_addon_line_items(line_items, data):
+    """Append add-on rows after service/package line items."""
+    addons = _collect_addon_line_items(data)
+    if not addons:
+        return list(line_items or [])
+    out = list(line_items or [])
+    for li in addons:
+        out.append(
+            {
+                "name": li["name"],
+                "description": li.get("description") or "",
+                "unit_price": li["unit_price"],
+                "quantity": li.get("quantity", 1),
+            }
+        )
+    return out
+
+
+def _service_only_approved_price(submission, bundled_price):
+    """
+    When approved_price bundles services + add-ons, return the service portion only
+    so add-ons can be sent as separate Jobber line items without double-counting.
+    """
+    addon_total = _addon_line_items_total(_submission_addon_line_items(submission))
+    if addon_total <= 0:
+        return bundled_price
+    try:
+        bundled = float(bundled_price)
+    except (TypeError, ValueError):
+        return bundled_price
+    return max(0.0, round(bundled - addon_total, 2))
+
+
+def _attach_submission_addons_to_booking_data(data, submission, split_bundled_price=False):
+    """Add addon_line_items from submission; optionally split bundled approved_price."""
+    addon_items = _submission_addon_line_items(submission)
+    if not addon_items:
+        return data
+    data = dict(data)
+    data["addon_line_items"] = addon_items
+    if (
+        split_bundled_price
+        and "services" not in data
+        and data.get("approved_price") is not None
+    ):
+        data["approved_price"] = _service_only_approved_price(submission, data["approved_price"])
+    return data
+
+
 def _normalize_booking_services(data):
     """
     Build job title and line_items for Jobber from booking payload.
@@ -783,6 +906,7 @@ def execute_booking_confirm(data, calendar_obj=None):
     job_title, line_items, norm_err = _normalize_booking_services(data)
     if norm_err:
         return None, Response({"error": norm_err}, status=status.HTTP_400_BAD_REQUEST)
+    line_items = _append_addon_line_items(line_items, data)
     if not line_items or not job_title:
         return None, Response(
             {
@@ -1667,7 +1791,7 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 "approved_price": float(sub_total),
             }
             data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
-            return data
+            return _attach_submission_addons_to_booking_data(data, submission, split_bundled_price=True)
         ghl_price = _merged_ghl_quote_price(m)
         price_for_job = None
         if sub_total is not None and (sub_total > 0 or bid_ip):
@@ -1709,7 +1833,7 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
                 ghl_price,
                 submission.id,
             )
-            return data
+            return _attach_submission_addons_to_booking_data(data, submission, split_bundled_price=True)
         return None
 
     if len(services_rows) == 1:
@@ -1730,7 +1854,7 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
             "approved_price": row["line_item_price"],
         }
         data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
-        return data
+        return _attach_submission_addons_to_booking_data(data, submission)
 
     data = {
         "first_name": first_name,
@@ -1745,7 +1869,7 @@ def _booking_confirm_dict_from_submission(submission, merged, calendar_obj):
         "services": services_rows,
     }
     data.update(_job_detail_dict_from_submission_and_ghl(submission, m))
-    return data
+    return _attach_submission_addons_to_booking_data(data, submission)
 
 
 def _booking_confirm_dict_from_ghl_only(merged, calendar_obj):
@@ -1886,7 +2010,8 @@ class BookingConfirmView(APIView):
         - Multiple labels: service_types (string array), package_title, package_description, approved_price
           (total is split evenly across line items).
         - Structured: services (array of { service_type, package_title?, package_description?, line_item_price | price }).
-      Optional add_ons.
+      Optional add_ons (job notes text). Optional addon_line_items (or addons) array of
+        { name, unit_price|price, quantity?, description? } for separate Jobber line items.
       Job details: bedrooms, bathrooms, square_footage, condition, pets, special_instructions, entry_instructions; optional estimated_labor_hours.
       Booking: scheduled_start_iso (ISO 8601) OR selected_date + selected_time.
     """
