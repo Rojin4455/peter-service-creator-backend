@@ -8,10 +8,16 @@ admin.site.register(ServicePackageSizeMapping)
 @admin.register(CustomerSubmission)
 class CustomerSubmissionAdmin(admin.ModelAdmin):
     """Admin configuration for CustomerSubmission"""
-    list_display = ['id', 'first_name', 'last_name', 'customer_email', 'status', 'created_at']
-    list_filter = ['status', 'created_at', 'property_type']
+    list_display = [
+        'id', 'first_name', 'last_name', 'customer_email', 'status',
+        'is_deleted', 'created_at',
+    ]
+    list_filter = ['status', 'is_deleted', 'created_at', 'property_type']
     search_fields = ['first_name', 'last_name', 'customer_email', 'company_name']
-    readonly_fields = ['id', 'created_at', 'updated_at']
+    readonly_fields = ['id', 'created_at', 'updated_at', 'deleted_at', 'deleted_by']
+
+    def get_queryset(self, request):
+        return CustomerSubmission.all_objects.all()
     
     fieldsets = (
         ('Customer Information', {
@@ -44,6 +50,9 @@ class CustomerSubmissionAdmin(admin.ModelAdmin):
         }),
         ('Timestamps', {
             'fields': ('id', 'created_at', 'updated_at', 'expires_at', 'declined_at')
+        }),
+        ('Soft delete', {
+            'fields': ('is_deleted', 'deleted_at', 'deleted_by'),
         }),
     )
 

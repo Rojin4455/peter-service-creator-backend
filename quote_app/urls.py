@@ -77,6 +77,11 @@ urlpatterns = [
         views.UpdateSubmissionBidInPersonView.as_view(),
         name="update-submission-bid-in-person",
     ),
+    path(
+        "submissions/<uuid:submission_id>/delete/",
+        views.SoftDeleteSubmissionView.as_view(),
+        name="soft-delete-submission",
+    ),
 
 
 

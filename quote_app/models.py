@@ -1,9 +1,33 @@
 # user_models.py - Updated with package selection
 from django.db import models
+from django.utils import timezone
 from decimal import Decimal
 import uuid
 from decouple import config
 from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService, Coupon
+
+
+class CustomerSubmissionQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_deleted=False)
+
+    def deleted_only(self):
+        return self.filter(is_deleted=True)
+
+
+class CustomerSubmissionManager(models.Manager):
+    """Default manager: excludes soft-deleted submissions."""
+
+    def get_queryset(self):
+        return CustomerSubmissionQuerySet(self.model, using=self._db).filter(is_deleted=False)
+
+
+class CustomerSubmissionAllObjectsManager(models.Manager):
+    """Unfiltered manager for admin / internal use."""
+
+    def get_queryset(self):
+        return CustomerSubmissionQuerySet(self.model, using=self._db)
+
 
 class CustomerSubmission(models.Model):
     """Main customer submission model (revamped)"""
@@ -105,7 +129,12 @@ class CustomerSubmission(models.Model):
     discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
     is_on_the_go = models.BooleanField(default=False)
-    
+
+    # Soft delete (admin-only; records kept for audit / reporting recovery)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.CharField(max_length=100, null=True, blank=True)
+
     # Admin notes
     bid_notes_private = models.TextField(null=True, blank=True, help_text="Private notes visible only to admins")
     bid_notes_public = models.TextField(null=True, blank=True, help_text="Public notes visible to customers")
@@ -115,12 +144,25 @@ class CustomerSubmission(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField(null=True, blank=True)
 
+    objects = CustomerSubmissionManager()
+    all_objects = CustomerSubmissionAllObjectsManager()
+
     class Meta:
         db_table = "customer_submissions"
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} - {self.customer_email}"
+
+    def soft_delete(self, deleted_by=None):
+        """Mark submission deleted without removing related rows from the database."""
+        if self.is_deleted:
+            return False
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = (deleted_by or "").strip() or None
+        self.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
+        return True
 
     def _build_quote_url(self):
         public_quote_base_url = config(

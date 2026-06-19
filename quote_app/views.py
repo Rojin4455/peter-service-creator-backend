@@ -2958,6 +2958,43 @@ class UpdateSubmissionBidInPersonView(APIView):
         )
 
 
+class SoftDeleteSubmissionView(APIView):
+    """
+    Admin-only soft delete: hides the submission from lists, detail, and booking
+    resolution while keeping the row and related data in the database.
+    """
+    permission_classes = [IsAdminPermission]
+
+    def delete(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+
+        if submission.is_deleted:
+            return Response(
+                {"error": "Submission is already deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted_by = None
+        if hasattr(request, "data") and isinstance(request.data, dict):
+            deleted_by = request.data.get("deleted_by")
+        if not deleted_by and request.user.is_authenticated:
+            deleted_by = getattr(request.user, "username", None) or getattr(
+                request.user, "email", None
+            )
+
+        submission.soft_delete(deleted_by=deleted_by)
+
+        return Response(
+            {
+                "message": "Submission deleted successfully.",
+                "submission_id": str(submission.id),
+                "deleted_at": submission.deleted_at.isoformat(),
+                "deleted_by": submission.deleted_by,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class UpdatePackagePriceView(APIView):
     """Admin endpoint to override price for a specific package quote"""
     permission_classes = [IsAdminPermission]
