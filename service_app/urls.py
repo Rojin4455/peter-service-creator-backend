@@ -2,6 +2,12 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .client_views import (
+    ClientDetailView,
+    ClientListView,
+    ClientSubmissionDetailView,
+    ClientSubmissionsListView,
+)
 
 router = DefaultRouter()
 router.register(r'quantity-discounts', views.QuantityDiscountViewSet, basename='quantity-discount')
@@ -149,6 +155,22 @@ urlpatterns = [
 
     path('monthly-analytics/',views. MonthlyAnalyticsAPIView.as_view(), name='monthly-analytics'),
     path('yearly-analytics/', views.YearlyAnalyticsAPIView.as_view(), name='yearly-analytics'),
+
+    # ============================================================================
+    # CLIENTS / CONTACTS (admin tab)
+    # ============================================================================
+    path('clients/', ClientListView.as_view(), name='client-list'),
+    path('clients/<str:client_id>/', ClientDetailView.as_view(), name='client-detail'),
+    path(
+        'clients/<str:client_id>/submissions/',
+        ClientSubmissionsListView.as_view(),
+        name='client-submissions-list',
+    ),
+    path(
+        'clients/<str:client_id>/submissions/<uuid:submission_id>/',
+        ClientSubmissionDetailView.as_view(),
+        name='client-submission-detail',
+    ),
 
     # Global coupons endpoint (AllowAny - accessible by anyone)
     path('coupons/global/', views.GlobalCouponListView.as_view(), name='global-coupons-list'),

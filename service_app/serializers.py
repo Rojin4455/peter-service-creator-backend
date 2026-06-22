@@ -1035,3 +1035,73 @@ class CustomerSubmissionListSerializer(serializers.ModelSerializer):
         """List of requested/selected service names"""
         selections = obj.customerserviceselection_set.select_related('service').all()
         return [sel.service.name for sel in selections]
+
+
+class ClientProfileUpdateSerializer(serializers.Serializer):
+    """Admin update of contact profile fields applied to all client submissions."""
+    first_name = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
+    last_name = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
+    company_name = serializers.CharField(max_length=255, required=False, allow_blank=True, allow_null=True)
+    customer_email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    customer_phone = serializers.CharField(max_length=20, required=False, allow_blank=True, allow_null=True)
+    postal_code = serializers.CharField(max_length=20, required=False, allow_blank=True, allow_null=True)
+    street_address = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    allow_sms = serializers.BooleanField(required=False)
+    allow_email = serializers.BooleanField(required=False)
+    location = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate(self, data):
+        if not data:
+            raise serializers.ValidationError("Provide at least one field to update.")
+        return data
+
+
+class AdminClientSubmissionUpdateSerializer(serializers.ModelSerializer):
+    """Limited admin PATCH fields for a submission from the Clients tab."""
+
+    class Meta:
+        model = CustomerSubmission
+        fields = [
+            "first_name",
+            "last_name",
+            "company_name",
+            "customer_email",
+            "customer_phone",
+            "postal_code",
+            "street_address",
+            "allow_sms",
+            "allow_email",
+            "heard_about_us",
+            "property_type",
+            "property_name",
+            "num_floors",
+            "is_previous_customer",
+            "status",
+            "is_bid_in_person",
+            "bid_notes_private",
+            "bid_notes_public",
+            "location",
+        ]
+        extra_kwargs = {
+            "first_name": {"required": False},
+            "last_name": {"required": False},
+            "company_name": {"required": False},
+            "customer_email": {"required": False},
+            "customer_phone": {"required": False},
+            "postal_code": {"required": False},
+            "street_address": {"required": False},
+            "heard_about_us": {"required": False},
+            "property_type": {"required": False},
+            "property_name": {"required": False},
+            "num_floors": {"required": False},
+            "status": {"required": False},
+            "bid_notes_private": {"required": False},
+            "bid_notes_public": {"required": False},
+            "location": {"required": False},
+        }
+
+    def validate_status(self, value):
+        valid = {choice[0] for choice in CustomerSubmission.STATUS_CHOICES}
+        if value not in valid:
+            raise serializers.ValidationError(f"Invalid status. Must be one of: {', '.join(sorted(valid))}")
+        return value
