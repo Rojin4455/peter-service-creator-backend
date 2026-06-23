@@ -91,4 +91,21 @@ urlpatterns = [
     path("coupons/apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
     path("coupons-apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
     path("coupons/<str:code>/", views.CouponDetailView.as_view(), name="coupon-detail"),
+
+    # Service bundle discounts (combo pricing)
+    path(
+        '<uuid:submission_id>/available-bundles/',
+        views.AvailableBundlesView.as_view(),
+        name='available-bundles',
+    ),
+    path(
+        '<uuid:submission_id>/apply-bundle/',
+        views.ApplyBundleView.as_view(),
+        name='apply-bundle',
+    ),
+    path(
+        '<uuid:submission_id>/remove-bundle/',
+        views.RemoveBundleView.as_view(),
+        name='remove-bundle',
+    ),
 ]

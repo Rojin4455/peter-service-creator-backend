@@ -15,7 +15,7 @@ from service_app.models import ServiceSettings
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location,
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService,Coupon
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing,QuantityDiscount, AddOnService,Coupon, ServiceBundle
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
@@ -27,7 +27,7 @@ from .serializers import (
     QuestionPublicSerializer, GlobalSizePackagePublicSerializer,CouponSerializer,
     CustomerSubmissionCreateSerializer, CustomerSubmissionDetailSerializer,AddOnServiceSerializer,
     ServiceQuestionResponseSerializer, PricingCalculationRequestSerializer,SubmitFinalQuoteSerializer,SubmissionAddOnSerializer,
-    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer,SubmissionNotesUpdateSerializer,SubmissionImageSerializer
+    ConditionalQuestionRequestSerializer, CustomerPackageQuoteSerializer,ConditionalQuestionResponseSerializer,ServiceResponseSubmissionSerializer,CustomerAvailabilitySerializer,MultipleAvailabilitySerializer,SubmissionNotesUpdateSerializer,SubmissionImageSerializer, ApplyBundleSerializer
 )
 
 from service_app.serializers import GlobalSizePackageSerializer
@@ -39,6 +39,15 @@ from quote_app.helpers import (
     sync_ghl_contact_tags_for_submission_status,
     upload_file_to_ghl_media,
     delete_file_from_ghl_media,
+)
+from quote_app.pricing_utils import (
+    build_bundle_preview,
+    clear_bundle_if_invalid,
+    find_matching_bundles,
+    recalculate_submission_totals,
+    submission_pricing_ready,
+    bundle_matches_submission,
+    get_submission_service_ids,
 )
 
 # Step 1: Get initial data (locations, services, size ranges)
@@ -110,6 +119,8 @@ class AddServicesToSubmissionView(APIView):
                         submission=submission,
                         service=service
                     )
+
+                clear_bundle_if_invalid(submission, save=True)
                 
                 return Response({'message': 'Services added successfully'})
         
@@ -1511,7 +1522,10 @@ class SubmissionDetailView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         submission_id = self.kwargs['id']
         return get_object_or_404(
-            CustomerSubmission.objects.select_related('location').prefetch_related(
+            CustomerSubmission.objects.select_related(
+                'location', 'applied_coupon', 'applied_bundle',
+            ).prefetch_related(
+                'applied_bundle__services',
                 'customerserviceselection_set__service',
                 'customerserviceselection_set__package_quotes__package',
                 'customerserviceselection_set__question_responses__question',
@@ -1786,76 +1800,8 @@ class SubmitFinalQuoteView(APIView):
         submission.save()
     
     def _calculate_final_totals_new(self, submission):
-        """Calculate final totals for the submission with new pricing logic including add-ons"""
-        service_selections = submission.customerserviceselection_set.filter(
-            selected_package__isnull=False
-        )
-        
-        total_base_price = Decimal('0.00')
-        total_sqft_price = Decimal('0.00')
-        total_adjustments = Decimal('0.00')
-        total_addons_price = Decimal('0.00')
-        total_services_price = Decimal('0.00')
-        total_services_price = Decimal('0.00')
-        
-        print(f"[DEBUG] Calculating final totals for submission {submission.id}")
-        
-        # Calculate service totals
-        for selection in service_selections:
-            selected_quote = selection.package_quotes.filter(is_selected=True).first()
-            if selected_quote:
-                # Track components for reporting (optional)
-                total_base_price += selected_quote.base_price
-                total_sqft_price += selected_quote.sqft_price
-                total_adjustments += selected_quote.question_adjustments
-                # Use computed package total (with base-price-minimum logic applied and surcharge included)
-                total_services_price += selected_quote.effective_total_price
-                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.effective_total_price}")
-        
-        # # Calculate add-ons total
-        # if submission.addons.exists():
-        #     for addon in submission.addons.all():
-        #         total_addons_price += addon.base_price
-        #         print(f"[DEBUG] Add-on {addon.name}: price={addon.base_price}")
-        
-        # print(f"[DEBUG] Total add-ons price: {total_addons_price}")
-
-        submission_addons = submission.submission_addons.select_related("addon")
-        for sub_addon in submission_addons:
-            subtotal = sub_addon.addon.base_price * sub_addon.quantity
-            total_addons_price += subtotal
-            print(
-                f"[DEBUG] Add-on {sub_addon.addon.name}: base_price={sub_addon.addon.base_price}, "
-                f"quantity={sub_addon.quantity}, subtotal={subtotal}"
-            )
-
-        print(f"[DEBUG] Total add-ons price: {total_addons_price}")
-
-        
-        # Final total uses package totals (which already enforce base price minimum and include surcharges) + add-ons
-        # NOTE: Do NOT add submission.total_surcharges again since surcharges are already included in each package total
-        final_total = total_services_price + total_addons_price
-        
-        print(f"[DEBUG] Final calculation: base={total_base_price} + sqft={total_sqft_price} + adjustments={total_adjustments} + addons={total_addons_price} = {final_total}")
-        print(f"[DEBUG] Note: Surcharges are already included in package totals, so not added separately")
-
-
-        if submission.applied_coupon and submission.applied_coupon.is_valid():
-            final_total = submission.applied_coupon.apply_discount(final_total)
-            submission.is_coupon_applied = True
-            print(f"[DEBUG] Coupon {submission.applied_coupon.code} applied: new total = {final_total}")
-        else:
-            submission.is_coupon_applied = False
-            print("[DEBUG] No valid coupon applied")
-        
-        # Update submission totals
-        submission.total_base_price = total_base_price + total_sqft_price  # Combined base and sqft
-        submission.total_adjustments = total_adjustments
-        submission.total_addons_price = total_addons_price  # Store add-ons total separately
-        submission.final_total = final_total
-        submission.save()
-        
-        print(f"[DEBUG] Updated submission totals: total_base_price={submission.total_base_price}, total_adjustments={submission.total_adjustments}, total_addons_price={submission.total_addons_price}, final_total={submission.final_total}")
+        """Calculate final totals for the submission (services → bundle → add-ons → coupon)."""
+        recalculate_submission_totals(submission, debug=True)
     
     def _get_package_sqft_price(self, submission, package):
         """Get the package-specific square footage price"""
@@ -2136,64 +2082,13 @@ class EditServiceResponsesView(APIView):
             service_selection.save()
     
     def _recalculate_final_totals_after_edit(self, submission):
-        """Recalculate final totals after editing responses"""
-        # Refresh submission from database to get latest data
+        """Recalculate final totals after editing responses."""
         submission.refresh_from_db()
-        
-        # Prefetch package quotes to ensure we get the latest data
-        service_selections = submission.customerserviceselection_set.filter(
-            selected_package__isnull=False
-        ).prefetch_related('package_quotes')
-        
-        total_base_price = Decimal('0.00')
-        total_sqft_price = Decimal('0.00')
-        total_adjustments = Decimal('0.00')
-        total_addons_price = Decimal('0.00')
-        total_services_price = Decimal('0.00')
-        
         print(f"[DEBUG] Recalculating totals after edit for submission {submission.id}")
-        
-        for selection in service_selections:
-            # Refresh selection to ensure we have latest package quotes
-            selection.refresh_from_db()
-            selected_quote = selection.package_quotes.filter(is_selected=True).first()
-            if selected_quote:
-                total_base_price += selected_quote.base_price
-                total_sqft_price += selected_quote.sqft_price
-                total_adjustments += selected_quote.question_adjustments
-                total_services_price += selected_quote.effective_total_price
-                print(f"[DEBUG] Service {selection.service.name}: base={selected_quote.base_price}, "
-                      f"sqft={selected_quote.sqft_price}, adjustments={selected_quote.question_adjustments}, "
-                      f"surcharge={selected_quote.surcharge_amount}, package_total={selected_quote.effective_total_price}")
-        
-        submission_addons = submission.submission_addons.select_related("addon")
-        for sub_addon in submission_addons:
-            subtotal = sub_addon.addon.base_price * sub_addon.quantity
-            total_addons_price += subtotal
-        
-        print(f"[DEBUG] Total add-ons price: {total_addons_price}")
-        
-        # NOTE: Do NOT add submission.total_surcharges again since surcharges are already included in each package total
-        pre_discount_total = (total_services_price + total_addons_price)
-        
-        final_total = pre_discount_total
-        if submission.applied_coupon and submission.applied_coupon.is_valid():
-            final_total = submission.applied_coupon.apply_discount(pre_discount_total)
-            submission.is_coupon_applied = True
-            submission.discounted_amount = pre_discount_total - final_total
-        else:
-            submission.is_coupon_applied = False
-            submission.discounted_amount = Decimal('0.00')
-        
-        submission.total_base_price = total_base_price + total_sqft_price
-        submission.total_adjustments = total_adjustments
-        submission.total_addons_price = total_addons_price
-        submission.final_total = final_total
-        
+        recalculate_submission_totals(submission, debug=True)
         if submission.edit_count == 0 and not submission.original_final_total:
             submission.original_final_total = submission.final_total
-        
-        submission.save()
+            submission.save(update_fields=['original_final_total', 'updated_at'])
     
     def _check_all_services_completed_optimized(self, submission):
         """Check if all selected services have responses - OPTIMIZED"""
@@ -3084,56 +2979,36 @@ class ApplyCouponView(APIView):
 
     def post(self, request):
         code = request.data.get("code")
-        amount = request.data.get("amount")
         submission_id = request.data.get("submission_id")
 
-        # Validate request fields
-        if not code or amount is None or not submission_id:
+        if not code or not submission_id:
             return Response(
-                {"detail": "Code, amount, and submission_id are required"},
+                {"detail": "Code and submission_id are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validate amount format
-        try:
-            amount = Decimal(amount)
-        except Exception:
-            return Response({"detail": "Invalid amount format"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Get coupon
         try:
             coupon = Coupon.objects.get(code=code, is_active=True)
         except Coupon.DoesNotExist:
             return Response({"detail": "Invalid coupon"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check if coupon is valid
         if not coupon.is_valid():
             return Response({"detail": "Coupon is expired or inactive"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Calculate discounts
-        final_price = coupon.apply_discount(amount)
-        discount_value = coupon.get_discount_amount(amount)
-
-        # Attach coupon to submission
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
         submission.applied_coupon = coupon
-        submission.discounted_amount = discount_value
-        submission.is_coupon_applied = True
-        submission.final_total = final_price
-        submission.save(update_fields=[
-            "applied_coupon",
-            "is_coupon_applied",
-            "discounted_amount",
-            "final_total",
-            "updated_at",
-        ])
+        submission.save(update_fields=["applied_coupon", "updated_at"])
+        recalculate_submission_totals(submission)
+
+        pre_coupon_estimate = submission.final_total + submission.discounted_amount
 
         return Response({
-            "original_amount": str(amount),
-            "discounted_amount": str(discount_value),
-            "final_price": str(final_price),
+            "original_amount": str(pre_coupon_estimate),
+            "discounted_amount": str(submission.discounted_amount),
+            "final_price": str(submission.final_total),
             "coupon": CouponSerializer(coupon).data,
             "submission_id": str(submission.id),
+            "bundle_discount_amount": str(submission.bundle_discount_amount),
         }, status=status.HTTP_200_OK)
 
 
@@ -3148,3 +3023,129 @@ class GlobalCouponListView(generics.ListAPIView):
             is_global=True,
             is_active=True
         ).order_by("-created_at")
+
+
+class AvailableBundlesView(APIView):
+    """List bundles that exactly match the submission's selected services."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        pricing_ready = submission_pricing_ready(submission)
+        matching = find_matching_bundles(submission)
+
+        services_total = None
+        bundles = []
+        if pricing_ready and matching:
+            from quote_app.pricing_utils import compute_services_total
+            services_total = compute_services_total(submission)
+            bundles = [
+                build_bundle_preview(submission, bundle, services_total)
+                for bundle in matching
+            ]
+            bundles.sort(
+                key=lambda item: Decimal(item['bundle_discount_amount']),
+                reverse=True,
+            )
+
+        return Response({
+            'submission_id': str(submission.id),
+            'pricing_ready': pricing_ready,
+            'available_bundles': bundles,
+            'applied_bundle_id': (
+                str(submission.applied_bundle_id) if submission.applied_bundle_id else None
+            ),
+            'is_bundle_applied': submission.is_bundle_applied,
+        })
+
+
+class ApplyBundleView(APIView):
+    """Opt-in: apply a matching bundle discount to the submission."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        serializer = ApplyBundleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if submission.status == 'approved':
+            return Response(
+                {'error': 'Cannot change bundle on an approved submission.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not submission_pricing_ready(submission):
+            return Response(
+                {'error': 'Select a package for each service before applying a bundle.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        bundle = get_object_or_404(
+            ServiceBundle,
+            id=serializer.validated_data['bundle_id'],
+            is_active=True,
+        )
+
+        service_ids = get_submission_service_ids(submission)
+        if not bundle_matches_submission(bundle, service_ids):
+            return Response(
+                {'error': 'This bundle does not match the selected services.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        submission.applied_bundle = bundle
+        submission.is_bundle_applied = True
+        submission.save(update_fields=['applied_bundle', 'is_bundle_applied', 'updated_at'])
+        recalculate_submission_totals(submission)
+
+        from quote_app.pricing_utils import compute_services_total
+        services_total = compute_services_total(submission)
+        preview = build_bundle_preview(submission, bundle, services_total)
+
+        return Response({
+            'message': 'Bundle applied successfully',
+            'submission_id': str(submission.id),
+            'bundle': preview,
+            'final_total': str(submission.final_total),
+            'bundle_discount_amount': str(submission.bundle_discount_amount),
+            'discounted_amount': str(submission.discounted_amount),
+        })
+
+
+class RemoveBundleView(APIView):
+    """Remove an applied bundle discount (keep à la carte pricing)."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+
+        if submission.status == 'approved':
+            return Response(
+                {'error': 'Cannot change bundle on an approved submission.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not submission.is_bundle_applied and not submission.applied_bundle_id:
+            return Response(
+                {'message': 'No bundle was applied'},
+                status=status.HTTP_200_OK,
+            )
+
+        submission.applied_bundle = None
+        submission.is_bundle_applied = False
+        submission.bundle_discount_amount = Decimal('0.00')
+        submission.save(
+            update_fields=[
+                'applied_bundle',
+                'is_bundle_applied',
+                'bundle_discount_amount',
+                'updated_at',
+            ]
+        )
+        recalculate_submission_totals(submission)
+
+        return Response({
+            'message': 'Bundle removed successfully',
+            'submission_id': str(submission.id),
+            'final_total': str(submission.final_total),
+        })

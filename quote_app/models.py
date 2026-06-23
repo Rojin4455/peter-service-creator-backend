@@ -4,7 +4,18 @@ from django.utils import timezone
 from decimal import Decimal
 import uuid
 from decouple import config
-from service_app.models import Service, Package, Location, Question, QuestionOption, SubQuestion,GlobalSizePackage,AddOnService, Coupon
+from service_app.models import (
+    Service,
+    Package,
+    Location,
+    Question,
+    QuestionOption,
+    SubQuestion,
+    GlobalSizePackage,
+    AddOnService,
+    Coupon,
+    ServiceBundle,
+)
 
 
 class CustomerSubmissionQuerySet(models.QuerySet):
@@ -127,6 +138,16 @@ class CustomerSubmission(models.Model):
     )
     is_coupon_applied = models.BooleanField(default=False)
     discounted_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    applied_bundle = models.ForeignKey(
+        ServiceBundle,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submissions',
+    )
+    is_bundle_applied = models.BooleanField(default=False)
+    bundle_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
     is_on_the_go = models.BooleanField(default=False)
 

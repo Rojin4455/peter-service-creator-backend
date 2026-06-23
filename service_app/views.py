@@ -1418,8 +1418,8 @@ class ServiceMappedSizesStructuredAPIView(generics.ListAPIView):
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
-from .models import Coupon
-from .serializers import CouponSerializer
+from .models import Coupon, ServiceBundle
+from .serializers import CouponSerializer, ServiceBundleSerializer
 from decimal import Decimal
 
 class CouponViewSet(viewsets.ModelViewSet):
@@ -1448,6 +1448,12 @@ class CouponViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ServiceBundleViewSet(viewsets.ModelViewSet):
+    queryset = ServiceBundle.objects.prefetch_related('services').all().order_by('name')
+    serializer_class = ServiceBundleSerializer
+    permission_classes = [permissions.IsAdminUser]
 
 
 class GlobalCouponListView(APIView):

@@ -4,7 +4,8 @@ from decimal import Decimal
 from service_app.models import (
     Service, Package, Feature, PackageFeature, Location, 
     Question, QuestionOption, SubQuestion, GlobalSizePackage,
-    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing, AddOnService,Coupon
+    ServicePackageSizeMapping, QuestionPricing, OptionPricing, SubQuestionPricing, AddOnService, Coupon,
+    ServiceBundle,
 )
 from .models import (
     CustomerSubmission, CustomerServiceSelection, CustomerQuestionResponse,
@@ -12,7 +13,7 @@ from .models import (
     CustomerPackageQuote, SubmissionAddOn, CustomerAvailability, SubmissionImage,
 )
 
-from service_app.serializers import ServiceSettingsSerializer, CouponSerializer
+from service_app.serializers import ServiceSettingsSerializer, CouponSerializer, ServiceBundleSerializer
 
 class LocationPublicSerializer(serializers.ModelSerializer):
     """Public serializer for locations"""
@@ -280,7 +281,7 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
     images = SubmissionImageSerializer(many=True, read_only=True)
 
     applied_coupon = CouponSerializer(read_only=True)
-    
+    applied_bundle = ServiceBundleSerializer(read_only=True)
 
     class Meta:
         model = CustomerSubmission
@@ -329,6 +330,11 @@ class CustomerSubmissionDetailSerializer(serializers.ModelSerializer):
             'applied_coupon',
             'is_coupon_applied',
             'discounted_amount',
+
+            # bundle
+            'applied_bundle',
+            'is_bundle_applied',
+            'bundle_discount_amount',
             
             # Admin notes
             'bid_notes_private',
@@ -647,6 +653,10 @@ class CouponSerializer(serializers.ModelSerializer):
     def get_is_valid(self, obj):
         return obj.is_valid()
     
+
+
+class ApplyBundleSerializer(serializers.Serializer):
+    bundle_id = serializers.UUIDField()
 
 
 class SubmissionCouponSerializer(serializers.ModelSerializer):

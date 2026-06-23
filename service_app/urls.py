@@ -12,6 +12,7 @@ from .client_views import (
 router = DefaultRouter()
 router.register(r'quantity-discounts', views.QuantityDiscountViewSet, basename='quantity-discount')
 router.register(r'coupons', views.CouponViewSet, basename="coupon")
+router.register(r'bundles', views.ServiceBundleViewSet, basename="service-bundle")
 
 
 # Complete Admin API URLs

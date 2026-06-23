@@ -45,6 +45,9 @@ class CustomerSubmissionAdmin(admin.ModelAdmin):
         ('Coupon Information', {
             'fields': ('applied_coupon', 'is_coupon_applied', 'discounted_amount')
         }),
+        ('Bundle Information', {
+            'fields': ('applied_bundle', 'is_bundle_applied', 'bundle_discount_amount')
+        }),
         ('Edit History', {
             'fields': ('last_edited_at', 'edited_by', 'edit_count', 'original_final_total', 'edit_history')
         }),

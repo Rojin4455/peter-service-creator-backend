@@ -213,7 +213,7 @@ class ClientSubmissionDetailView(APIView):
     def _submission_queryset(self, client_id, include_on_the_go=False):
         return (
             submissions_for_client_id(client_id, include_on_the_go=include_on_the_go)
-            .select_related("location", "size_range", "applied_coupon")
+            .select_related("location", "size_range", "applied_coupon", "applied_bundle")
             .prefetch_related(
                 "customerserviceselection_set__service",
                 "customerserviceselection_set__package_quotes__package",

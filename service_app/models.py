@@ -769,3 +769,78 @@ class Coupon(models.Model):
     def apply_discount(self, amount):
         discount = self.get_discount_amount(amount)
         return max(amount - discount, 0)
+
+
+class ServiceBundle(models.Model):
+    """Admin-defined service combo with a discount offered when the exact service set is selected."""
+
+    DISCOUNT_TYPE_CHOICES = [
+        ('percent', 'Percentage'),
+        ('fixed', 'Fixed Amount'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    discount_type = models.CharField(
+        max_length=10,
+        choices=DISCOUNT_TYPE_CHOICES,
+        default='percent',
+    )
+    discount_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00')), MaxValueValidator(Decimal('100.00'))],
+        help_text="Percentage discount (0-100). Used when discount_type is percent.",
+    )
+    discount_fixed = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Fixed amount discount. Used when discount_type is fixed.",
+    )
+    is_active = models.BooleanField(default=True)
+    services = models.ManyToManyField(
+        Service,
+        related_name='service_bundles',
+        help_text="Exact set of services required for this bundle (minimum 2).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'service_bundles'
+        ordering = ['name']
+
+    def __str__(self):
+        if self.discount_type == 'fixed' and self.discount_fixed:
+            return f"{self.name} (${self.discount_fixed} off)"
+        return f"{self.name} ({self.discount_percentage or 0}% off)"
+
+    def get_service_id_set(self):
+        return set(self.services.values_list('id', flat=True))
+
+    def is_valid(self):
+        return self.is_active and self.services.count() >= 2
+
+    def get_discount_amount(self, amount):
+        if not self.is_valid():
+            return Decimal('0.00')
+
+        amount = Decimal(amount)
+        total_discount = Decimal('0.00')
+
+        if self.discount_type == 'percent' and self.discount_percentage:
+            total_discount = (amount * self.discount_percentage) / 100
+        elif self.discount_type == 'fixed' and self.discount_fixed:
+            total_discount = self.discount_fixed
+
+        return min(total_discount, amount)
+
+    def apply_discount(self, amount):
+        discount = self.get_discount_amount(amount)
+        return max(Decimal(amount) - discount, Decimal('0.00'))

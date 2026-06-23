@@ -977,7 +977,7 @@ class ServiceSizePackageSerializer(serializers.ModelSerializer):
 
 
 from rest_framework import serializers
-from .models import Coupon
+from .models import Coupon, ServiceBundle, Service
 
 class CouponSerializer(serializers.ModelSerializer):
     class Meta:
@@ -1105,3 +1105,90 @@ class AdminClientSubmissionUpdateSerializer(serializers.ModelSerializer):
         if value not in valid:
             raise serializers.ValidationError(f"Invalid status. Must be one of: {', '.join(sorted(valid))}")
         return value
+
+
+class ServiceBundleServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Service
+        fields = ['id', 'name']
+
+
+class ServiceBundleSerializer(serializers.ModelSerializer):
+    services = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Service.objects.all(),
+    )
+    service_details = ServiceBundleServiceSerializer(
+        source='services',
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = ServiceBundle
+        fields = [
+            'id',
+            'name',
+            'description',
+            'discount_type',
+            'discount_percentage',
+            'discount_fixed',
+            'is_active',
+            'services',
+            'service_details',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'service_details', 'created_at', 'updated_at']
+
+    def validate_services(self, services):
+        if len(services) < 2:
+            raise serializers.ValidationError('A bundle must include at least 2 services.')
+        inactive = [str(s.id) for s in services if not s.is_active]
+        if inactive:
+            raise serializers.ValidationError(
+                f'These services are inactive and cannot be added to a bundle: {", ".join(inactive)}. '
+                'Re-activate them under Service Management or pick active services.'
+            )
+        return services
+
+    def validate(self, attrs):
+        discount_type = attrs.get(
+            'discount_type',
+            getattr(self.instance, 'discount_type', 'percent'),
+        )
+        percentage = attrs.get(
+            'discount_percentage',
+            getattr(self.instance, 'discount_percentage', None),
+        )
+        fixed = attrs.get(
+            'discount_fixed',
+            getattr(self.instance, 'discount_fixed', None),
+        )
+
+        if discount_type == 'percent':
+            if percentage is None or percentage <= 0:
+                raise serializers.ValidationError(
+                    {'discount_percentage': 'A positive percentage is required for percent bundles.'}
+                )
+        elif discount_type == 'fixed':
+            if fixed is None or fixed <= 0:
+                raise serializers.ValidationError(
+                    {'discount_fixed': 'A positive fixed amount is required for fixed bundles.'}
+                )
+        return attrs
+
+    def create(self, validated_data):
+        services = validated_data.pop('services')
+        bundle = ServiceBundle.objects.create(**validated_data)
+        bundle.services.set(services)
+        return bundle
+
+    def update(self, instance, validated_data):
+        services = validated_data.pop('services', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if services is not None:
+            instance.services.set(services)
+        return instance
