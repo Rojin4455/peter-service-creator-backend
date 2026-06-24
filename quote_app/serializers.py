@@ -592,10 +592,16 @@ class ServiceResponseSubmissionSerializer(serializers.Serializer):
 
 class SelectedPackageSerializer(serializers.Serializer):
     """Serializer for selected package information"""
-    service_selection_id = serializers.UUIDField()
+    service_selection_id = serializers.UUIDField(required=False)
+    service_id = serializers.UUIDField(required=False)
     package_id = serializers.UUIDField()
     package_name = serializers.CharField(read_only=True)
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+
+    def validate(self, attrs):
+        if not attrs.get('package_id'):
+            raise serializers.ValidationError({'package_id': 'This field is required.'})
+        return attrs
 
 class SubmitFinalQuoteSerializer(serializers.Serializer):
     """Serializer for final quote submission"""

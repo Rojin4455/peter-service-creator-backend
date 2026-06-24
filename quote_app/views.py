@@ -1763,6 +1763,8 @@ class SubmitFinalQuoteView(APIView):
                     'submitted_at': timezone.now().isoformat()
                 })
         
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
