@@ -2944,6 +2944,55 @@ class ApplyCouponView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class RemoveCouponView(APIView):
+    """Remove an applied coupon and recalculate final_total (bundle discount kept if applied)."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, submission_id=None):
+        sid = submission_id or request.data.get('submission_id')
+        if not sid:
+            return Response(
+                {'detail': 'submission_id is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        submission = get_object_or_404(CustomerSubmission, id=sid)
+
+        if submission.status == 'approved':
+            return Response(
+                {'error': 'Cannot change coupon on an approved submission.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not submission.applied_coupon_id and not submission.is_coupon_applied:
+            return Response(
+                {'message': 'No coupon was applied'},
+                status=status.HTTP_200_OK,
+            )
+
+        submission.applied_coupon = None
+        submission.is_coupon_applied = False
+        submission.discounted_amount = Decimal('0.00')
+        submission.save(
+            update_fields=[
+                'applied_coupon',
+                'is_coupon_applied',
+                'discounted_amount',
+                'updated_at',
+            ]
+        )
+        recalculate_submission_totals(submission)
+
+        return Response({
+            'message': 'Coupon removed successfully',
+            'submission_id': str(submission.id),
+            'final_total': str(submission.final_total),
+            'discounted_amount': str(submission.discounted_amount),
+            'is_coupon_applied': submission.is_coupon_applied,
+            'bundle_discount_amount': str(submission.bundle_discount_amount),
+        }, status=status.HTTP_200_OK)
+
+
 # ✅ Get only global coupons
 class GlobalCouponListView(generics.ListAPIView):
     """View to fetch only global coupons - accessible by anyone"""

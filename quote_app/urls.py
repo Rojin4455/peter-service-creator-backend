@@ -97,7 +97,14 @@ urlpatterns = [
     path("coupons/global/", views.GlobalCouponListView.as_view(), name="global-coupons-list"),
     path("coupons/apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
     path("coupons-apply/", views.ApplyCouponView.as_view(), name="coupon-apply"),
+    path("coupons/remove/", views.RemoveCouponView.as_view(), name="coupon-remove"),
+    path("coupons-remove/", views.RemoveCouponView.as_view(), name="coupon-remove-alias"),
     path("coupons/<str:code>/", views.CouponDetailView.as_view(), name="coupon-detail"),
+    path(
+        '<uuid:submission_id>/remove-coupon/',
+        views.RemoveCouponView.as_view(),
+        name='remove-coupon',
+    ),
 
     # Service bundle discounts (combo pricing)
     path(
