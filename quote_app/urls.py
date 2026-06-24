@@ -49,6 +49,13 @@ urlpatterns = [
     # Admin endpoint to update package price
     path('package-quotes/<uuid:quote_id>/price/', views.UpdatePackagePriceView.as_view(), name='update-package-price'),
     
+    # Step 7b: Persist package selections (required before bundles/coupons on review step)
+    path(
+        '<uuid:submission_id>/select-packages/',
+        views.SelectPackagesView.as_view(),
+        name='select-packages',
+    ),
+
     # Step 8: Submit final quote
     path('<uuid:submission_id>/submit/', views.SubmitFinalQuoteView.as_view(), name='submit-quote'),
 

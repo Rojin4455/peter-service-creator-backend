@@ -657,6 +657,7 @@ class CouponSerializer(serializers.ModelSerializer):
 
 class ApplyBundleSerializer(serializers.Serializer):
     bundle_id = serializers.UUIDField()
+    selected_packages = SelectedPackageSerializer(many=True, required=False)
 
 
 class SubmissionCouponSerializer(serializers.ModelSerializer):

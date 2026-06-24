@@ -48,7 +48,9 @@ from quote_app.pricing_utils import (
     submission_pricing_ready,
     bundle_matches_submission,
     get_submission_service_ids,
+    compute_services_total,
 )
+from quote_app.package_selection import sync_package_selections
 
 # Step 1: Get initial data (locations, services, size ranges)
 class InitialDataView(APIView):
@@ -1766,38 +1768,7 @@ class SubmitFinalQuoteView(APIView):
     
     def _update_package_selections(self, submission, selected_packages):
         """Update package selections if provided in payload"""
-        for package_data in selected_packages:
-            service_selection = get_object_or_404(
-                CustomerServiceSelection,
-                id=package_data['service_selection_id'],
-                submission=submission
-            )
-            
-            package = get_object_or_404(Package, id=package_data['package_id'])
-            
-            # Update service selection
-            service_selection.selected_package = package
-            
-            # Get the quote for this package
-            quote = get_object_or_404(
-                CustomerPackageQuote,
-                service_selection=service_selection,
-                package=package
-            )
-            
-            service_selection.final_base_price = quote.base_price + quote.sqft_price
-            service_selection.final_sqft_price = quote.sqft_price
-            service_selection.final_total_price = quote.effective_total_price
-            service_selection.save()
-            
-            # Mark this quote as selected
-            service_selection.package_quotes.update(is_selected=False)
-            quote.is_selected = True
-            quote.save()
-        
-        # Update submission status
-        submission.status = 'packages_selected'
-        submission.save()
+        sync_package_selections(submission, selected_packages, recalculate=False)
     
     def _calculate_final_totals_new(self, submission):
         """Calculate final totals for the submission (services → bundle → add-ons → coupon)."""
@@ -2492,78 +2463,37 @@ class CustomerAvailabilityView(APIView):
 
 
 class SelectPackagesView(APIView):
-    """Select packages for each service before final submission"""
+    """Persist package selections before review / bundle / coupon steps."""
     permission_classes = [AllowAny]
-    
+
     def post(self, request, submission_id):
         submission = get_object_or_404(CustomerSubmission, id=submission_id)
-        
-        if submission.status != 'submitted':
-            return Response({
-                'error': 'Cannot select packages. Complete service responses first.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        if submission.status in ('approved', 'declined', 'expired'):
+            return Response(
+                {'error': f'Cannot select packages for a {submission.status} submission.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         selected_packages = request.data.get('selected_packages', [])
-        
         if not selected_packages:
-            return Response({
-                'error': 'No packages selected'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response({'error': 'No packages selected'}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             with transaction.atomic():
-                for package_data in selected_packages:
-                    service_selection = get_object_or_404(
-                        CustomerServiceSelection,
-                        id=package_data['service_selection_id'],
-                        submission=submission
-                    )
-                    
-                    package = get_object_or_404(Package, id=package_data['package_id'])
-                    
-                    # Verify this package exists for this service
-                    if package.service != service_selection.service:
-                        return Response({
-                            'error': f'Package {package.name} does not belong to service {service_selection.service.name}'
-                        }, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    # Update service selection
-                    service_selection.selected_package = package
-                    
-                    # Get the quote for this package
-                    quote = get_object_or_404(
-                        CustomerPackageQuote,
-                        service_selection=service_selection,
-                        package=package
-                    )
-                    
-                    # Update service selection with final pricing
-                    service_selection.final_base_price = quote.base_price + quote.sqft_price
-                    service_selection.final_sqft_price = quote.sqft_price
-                    service_selection.final_total_price = quote.total_price
-                    service_selection.save()
-                    
-                    # Mark this quote as selected
-                    service_selection.package_quotes.update(is_selected=False)
-                    quote.is_selected = True
-                    quote.save()
-                
-                # Update submission status
-                submission.status = 'packages_selected'
-                submission.save()
-                
-                # Calculate final totals
-                self._calculate_final_totals_new(submission)
-                
-                return Response({
-                    'message': 'Packages selected successfully',
-                    'submission_id': submission.id,
-                    'status': submission.status,
-                    'final_total': submission.final_total
-                })
-        
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                sync_package_selections(submission, selected_packages)
+            submission.refresh_from_db()
+            return Response({
+                'message': 'Packages selected successfully',
+                'submission_id': str(submission.id),
+                'status': submission.status,
+                'final_total': str(submission.final_total),
+                'pricing_ready': submission_pricing_ready(submission),
+            })
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
 
 
@@ -3029,15 +2959,13 @@ class AvailableBundlesView(APIView):
     """List bundles that exactly match the submission's selected services."""
     permission_classes = [AllowAny]
 
-    def get(self, request, submission_id):
-        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+    def _build_response(self, submission):
         pricing_ready = submission_pricing_ready(submission)
         matching = find_matching_bundles(submission)
+        service_ids = sorted(get_submission_service_ids(submission))
 
-        services_total = None
         bundles = []
         if pricing_ready and matching:
-            from quote_app.pricing_utils import compute_services_total
             services_total = compute_services_total(submission)
             bundles = [
                 build_bundle_preview(submission, bundle, services_total)
@@ -3048,15 +2976,75 @@ class AvailableBundlesView(APIView):
                 reverse=True,
             )
 
-        return Response({
+        potential_bundles = []
+        if matching and not pricing_ready:
+            potential_bundles = [
+                {
+                    'bundle_id': str(bundle.id),
+                    'name': bundle.name,
+                    'description': bundle.description,
+                    'discount_type': bundle.discount_type,
+                    'discount_percentage': (
+                        str(bundle.discount_percentage)
+                        if bundle.discount_percentage is not None else None
+                    ),
+                    'discount_fixed': (
+                        str(bundle.discount_fixed)
+                        if bundle.discount_fixed is not None else None
+                    ),
+                }
+                for bundle in matching
+            ]
+
+        return {
             'submission_id': str(submission.id),
+            'status': submission.status,
             'pricing_ready': pricing_ready,
+            'selected_service_count': len(service_ids),
+            'selected_service_ids': [str(sid) for sid in service_ids],
             'available_bundles': bundles,
+            'potential_bundles': potential_bundles,
             'applied_bundle_id': (
                 str(submission.applied_bundle_id) if submission.applied_bundle_id else None
             ),
             'is_bundle_applied': submission.is_bundle_applied,
-        })
+            'pricing_ready_hint': (
+                None
+                if pricing_ready
+                else (
+                    'Package selections are not saved on the server yet. Call '
+                    'POST /api/quote/{submission_id}/select-packages/ first, or POST '
+                    'to this endpoint with selected_packages in the body.'
+                )
+            ),
+        }
+
+    def get(self, request, submission_id):
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        return Response(self._build_response(submission))
+
+    def post(self, request, submission_id):
+        """
+        Optional: include selected_packages to persist package picks, then return bundles.
+        Use this when the Review step holds package choices only in frontend state.
+        """
+        submission = get_object_or_404(CustomerSubmission, id=submission_id)
+        selected_packages = request.data.get('selected_packages', [])
+
+        if selected_packages:
+            if submission.status in ('approved', 'declined', 'expired'):
+                return Response(
+                    {'error': f'Cannot update packages for a {submission.status} submission.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                with transaction.atomic():
+                    sync_package_selections(submission, selected_packages)
+                submission.refresh_from_db()
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(self._build_response(submission))
 
 
 class ApplyBundleView(APIView):
@@ -3073,6 +3061,15 @@ class ApplyBundleView(APIView):
                 {'error': 'Cannot change bundle on an approved submission.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        selected_packages = serializer.validated_data.get('selected_packages')
+        if selected_packages:
+            try:
+                with transaction.atomic():
+                    sync_package_selections(submission, selected_packages)
+                submission.refresh_from_db()
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         if not submission_pricing_ready(submission):
             return Response(
@@ -3098,7 +3095,6 @@ class ApplyBundleView(APIView):
         submission.save(update_fields=['applied_bundle', 'is_bundle_applied', 'updated_at'])
         recalculate_submission_totals(submission)
 
-        from quote_app.pricing_utils import compute_services_total
         services_total = compute_services_total(submission)
         preview = build_bundle_preview(submission, bundle, services_total)
 
