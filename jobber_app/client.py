@@ -23,51 +23,86 @@ def get_access_token():
     return creds.access_token
 
 
-def _refresh_jobber_tokens():
+def _refresh_jobber_tokens(stale_access_token=None):
     """
     Exchange refresh_token for new access_token (and possibly new refresh_token).
+
+    Uses a DB row lock so only one gunicorn worker refreshes at a time. Jobber rotates
+    refresh tokens; concurrent refreshes with the same token invalidate the connection.
+
+    If ``stale_access_token`` is provided and another worker already refreshed while we
+    waited for the lock, reuse the new access token without calling Jobber again.
+
     Updates JobberAuthCredentials in DB. Returns (new_access_token, None) or (None, error_message).
+    Does not touch GHL credentials or any non-Jobber auth.
     """
+    from django.db import transaction
     from accounts.models import JobberAuthCredentials
-    creds = JobberAuthCredentials.objects.first()
-    if not creds or not creds.refresh_token:
-        return None, "No refresh token. Reconnect Jobber at /api/accounts/jobber/connect/"
-    try:
-        client_id = config("JOBBER_CLIENT_ID")
-        client_secret = config("JOBBER_CLIENT_SECRET")
-    except Exception as e:
-        return None, f"Jobber env not configured: {e}"
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": creds.refresh_token,
-        "client_id": client_id,
-        "client_secret": client_secret,
-    }
-    resp = requests.post(JOBBER_TOKEN_URL, data=data, timeout=30)
-    try:
-        response_data = resp.json()
-    except requests.exceptions.JSONDecodeError:
-        response_data = {}
-    if resp.status_code != 200:
-        err = (
-            response_data.get("error_description")
-            or response_data.get("error")
-            or resp.text[:300].strip()
-        ) or "Unknown error"
-        logger.warning("Jobber token refresh failed: %s", err)
-        msg = f"Token refresh failed: {err}"
-        if "refresh token" in err.lower() and ("not valid" in err.lower() or "invalid" in err.lower() or "expired" in err.lower()):
-            msg += " Reconnect Jobber at /api/accounts/jobber/connect/"
-        return None, msg
-    access_token = response_data.get("access_token")
-    refresh_token = response_data.get("refresh_token") or creds.refresh_token
-    if not access_token:
-        return None, "Missing access_token in refresh response"
-    creds.access_token = access_token
-    creds.refresh_token = refresh_token
-    creds.save(update_fields=["access_token", "refresh_token", "updated_at"])
-    logger.info("Jobber access token refreshed successfully")
-    return access_token, None
+
+    with transaction.atomic():
+        creds = (
+            JobberAuthCredentials.objects.select_for_update()
+            .order_by("id")
+            .first()
+        )
+        if not creds or not creds.refresh_token:
+            return None, "No refresh token. Reconnect Jobber at /api/accounts/jobber/connect/"
+
+        # Another worker refreshed while we waited — Jobber's recommended skip pattern.
+        if (
+            stale_access_token
+            and creds.access_token
+            and creds.access_token != stale_access_token
+        ):
+            logger.info(
+                "Jobber tokens already refreshed by another worker; reusing stored access token"
+            )
+            return creds.access_token, None
+
+        try:
+            client_id = config("JOBBER_CLIENT_ID")
+            client_secret = config("JOBBER_CLIENT_SECRET")
+        except Exception as e:
+            return None, f"Jobber env not configured: {e}"
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": creds.refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+        resp = requests.post(JOBBER_TOKEN_URL, data=data, timeout=30)
+        try:
+            response_data = resp.json()
+        except requests.exceptions.JSONDecodeError:
+            response_data = {}
+        if resp.status_code != 200:
+            err = (
+                response_data.get("error_description")
+                or response_data.get("error")
+                or resp.text[:300].strip()
+            ) or "Unknown error"
+            logger.warning("Jobber token refresh failed: %s", err)
+            msg = f"Token refresh failed: {err}"
+            if "refresh token" in err.lower() and (
+                "not valid" in err.lower()
+                or "invalid" in err.lower()
+                or "expired" in err.lower()
+            ):
+                msg += " Reconnect Jobber at /api/accounts/jobber/connect/"
+            return None, msg
+        access_token = response_data.get("access_token")
+        refresh_token = response_data.get("refresh_token") or creds.refresh_token
+        if not access_token:
+            return None, "Missing access_token in refresh response"
+        if not response_data.get("refresh_token"):
+            logger.warning(
+                "Jobber refresh response omitted refresh_token; keeping previous refresh_token"
+            )
+        creds.access_token = access_token
+        creds.refresh_token = refresh_token
+        creds.save(update_fields=["access_token", "refresh_token", "updated_at"])
+        logger.info("Jobber access token refreshed successfully")
+        return access_token, None
 
 
 def _is_token_expired_error(status_code, data):
@@ -102,7 +137,7 @@ def _request(query, variables=None, _retried=False):
     except requests.exceptions.JSONDecodeError:
         data = {}
     if _is_token_expired_error(resp.status_code, data) and not _retried:
-        new_token, err = _refresh_jobber_tokens()
+        new_token, err = _refresh_jobber_tokens(stale_access_token=token)
         if err:
             return None, err
         return _request(query, variables, _retried=True)
