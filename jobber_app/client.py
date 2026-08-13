@@ -1106,10 +1106,8 @@ def append_ghl_note_to_jobber_client(client_id, ghl_note_id, note_body, *, max_t
 # -----------------------------------------------------------------------------
 # Tasks (scheduled items — not Jobs)
 #
-# GraphQL confirmed against Jobber public schema (API version 2025-04-16):
-#   type Task implements ScheduledItemInterface {
-#     id, title, instructions, startAt, endAt, allDay, assignedUsers, jobberWebUri
-#   }
+# Live Jobber schema (2025-04-16): Task has id/title/instructions/startAt/endAt/allDay.
+# Task does NOT have jobberWebUri (that field exists on Client/Job, not Task).
 # Mutation naming matches other Jobber writes (jobCreate / visitCreate):
 #   taskCreate(input: TaskCreateAttributes!)
 # Dates: all-day range as ISO-8601 instants in JOBBER_BOOKING_TIMEZONE.
@@ -1128,7 +1126,6 @@ mutation TaskCreate($input: TaskCreateAttributes!) {
       startAt
       endAt
       allDay
-      jobberWebUri
     }
     userErrors {
       message
@@ -1148,7 +1145,6 @@ mutation TaskCreate($input: TaskCreateInput!) {
       startAt
       endAt
       allDay
-      jobberWebUri
     }
     userErrors {
       message
@@ -1167,7 +1163,6 @@ query TaskById($id: EncodedId!) {
     startAt
     endAt
     allDay
-    jobberWebUri
   }
 }
 """
