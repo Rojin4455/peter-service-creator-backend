@@ -1101,3 +1101,187 @@ def append_ghl_note_to_jobber_client(client_id, ghl_note_id, note_body, *, max_t
         block = block[-max_total_chars:]
     ok, uerr = create_client_note(client_id, block)
     return ok, uerr, bool(ok)
+
+
+# -----------------------------------------------------------------------------
+# Tasks (scheduled items — not Jobs)
+#
+# GraphQL confirmed against Jobber public schema (API version 2025-04-16):
+#   type Task implements ScheduledItemInterface {
+#     id, title, instructions, startAt, endAt, allDay, assignedUsers, jobberWebUri
+#   }
+# Mutation naming matches other Jobber writes (jobCreate / visitCreate):
+#   taskCreate(input: TaskCreateAttributes!)
+# Dates: all-day range as ISO-8601 instants in JOBBER_BOOKING_TIMEZONE.
+# Description from Hub is stored in Task.instructions (there is no Task.description).
+# Assignee: assignedUserIds: [EncodedId!] (same pattern as visitCreate).
+# If GraphiQL shows a different input type/field, adapt here — do not copy OAuth into Hub.
+# -----------------------------------------------------------------------------
+
+MUTATION_TASK_CREATE = """
+mutation TaskCreate($input: TaskCreateAttributes!) {
+  taskCreate(input: $input) {
+    task {
+      id
+      title
+      instructions
+      startAt
+      endAt
+      allDay
+      jobberWebUri
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+MUTATION_TASK_CREATE_INPUT_TYPE = """
+mutation TaskCreate($input: TaskCreateInput!) {
+  taskCreate(input: $input) {
+    task {
+      id
+      title
+      instructions
+      startAt
+      endAt
+      allDay
+      jobberWebUri
+    }
+    userErrors {
+      message
+      path
+    }
+  }
+}
+"""
+
+QUERY_TASK_BY_ID = """
+query TaskById($id: EncodedId!) {
+  task(id: $id) {
+    id
+    title
+    instructions
+    startAt
+    endAt
+    allDay
+    jobberWebUri
+  }
+}
+"""
+
+
+def _task_all_day_bounds(start_date, end_date):
+    """Inclusive all-day window in JOBBER_BOOKING_TIMEZONE as ISO-8601 strings."""
+    from datetime import date, datetime, time
+
+    from jobber_app.booking_schedule import default_booking_timezone, _zone
+
+    def _as_date(value):
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        s = str(value or "").strip()
+        if not s:
+            return None
+        return date.fromisoformat(s[:10])
+
+    start_d = _as_date(start_date)
+    end_d = _as_date(end_date) or start_d
+    if not start_d:
+        return None, None, "start_date is required (YYYY-MM-DD)"
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+
+    tz_name = default_booking_timezone()
+    zone = _zone(tz_name)
+    start_dt = datetime.combine(start_d, time.min)
+    end_dt = datetime.combine(end_d, time(23, 59, 59))
+    if zone is not None:
+        start_dt = start_dt.replace(tzinfo=zone)
+        end_dt = end_dt.replace(tzinfo=zone)
+    return start_dt.isoformat(timespec="seconds"), end_dt.isoformat(timespec="seconds"), None
+
+
+def _task_from_payload(data):
+    result = (data or {}).get("taskCreate") or {}
+    user_errors = result.get("userErrors") or []
+    if user_errors:
+        msg = "; ".join([e.get("message", str(e)) for e in user_errors])
+        return None, msg
+    task = result.get("task")
+    if not task or not task.get("id"):
+        return None, "No task returned from Jobber taskCreate"
+    return task, None
+
+
+def create_task(
+    title,
+    description,
+    start_date,
+    end_date,
+    *,
+    assignee_jobber_user_id=None,
+):
+    """
+    Create a Jobber Task covering an all-day date range.
+
+    Returns (task dict with id, error_message or None).
+    """
+    title = (title or "").strip()
+    if not title:
+        return None, "title is required"
+
+    start_iso, end_iso, date_err = _task_all_day_bounds(start_date, end_date)
+    if date_err:
+        return None, date_err
+
+    instructions = (description or "").strip()
+    input_obj = {
+        "title": title[:255],
+        "startAt": start_iso,
+        "endAt": end_iso,
+        "allDay": True,
+    }
+    if instructions:
+        input_obj["instructions"] = instructions[:5000]
+
+    assignee = (assignee_jobber_user_id or "").strip()
+    if assignee:
+        input_obj["assignedUserIds"] = [assignee]
+
+    data, err = _request(MUTATION_TASK_CREATE, {"input": input_obj})
+    if err and "TaskCreateAttributes" in err:
+        data, err = _request(MUTATION_TASK_CREATE_INPUT_TYPE, {"input": input_obj})
+
+    if err and assignee and "assignedUserIds" in err:
+        input_obj.pop("assignedUserIds", None)
+        input_obj["assignedTo"] = assignee
+        data, err = _request(MUTATION_TASK_CREATE, {"input": input_obj})
+        if err and "TaskCreateAttributes" in err:
+            data, err = _request(MUTATION_TASK_CREATE_INPUT_TYPE, {"input": input_obj})
+
+    if err and instructions and "instructions" in err.lower():
+        input_obj.pop("instructions", None)
+        input_obj["description"] = instructions[:5000]
+        data, err = _request(MUTATION_TASK_CREATE, {"input": input_obj})
+        if err and "TaskCreateAttributes" in err:
+            data, err = _request(MUTATION_TASK_CREATE_INPUT_TYPE, {"input": input_obj})
+
+    if err:
+        return None, err
+    return _task_from_payload(data)
+
+
+def get_task(task_id):
+    """Fetch a Jobber task by encoded id. Returns (task dict or None, error)."""
+    if not task_id:
+        return None, "task_id is required"
+    data, err = _request(QUERY_TASK_BY_ID, {"id": str(task_id)})
+    if err:
+        return None, err
+    task = (data or {}).get("task")
+    if not task:
+        return None, "Task not found"
+    return task, None

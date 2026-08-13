@@ -127,3 +127,19 @@ class GhlAppointmentJobberJobMap(models.Model):
             .order_by("-created_at")
             .first()
         )
+
+
+class JobberTaskIdempotency(models.Model):
+    """One Jobber task per Hub leave-approval / idempotency key."""
+
+    idempotency_key = models.CharField(max_length=128, unique=True, db_index=True)
+    jobber_task_id = models.CharField(max_length=255, db_index=True)
+    jobber_web_uri = models.CharField(max_length=512, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "jobber_task_idempotency"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.idempotency_key} → {self.jobber_task_id}"

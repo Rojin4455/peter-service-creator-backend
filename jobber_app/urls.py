@@ -7,6 +7,7 @@ urlpatterns = [
     path("properties/create/", views.JobberCreatePropertyView.as_view(), name="jobber-create-property"),
     path("visits/", views.JobberVisitsView.as_view(), name="jobber-visits"),
     path("jobs/create/", views.JobberCreateJobView.as_view(), name="jobber-create-job"),
+    path("tasks/create/", views.JobberCreateTaskView.as_view(), name="jobber-create-task"),
     path(
         "jobs/schedule-visit/",
         views.JobberScheduleVisitView.as_view(),

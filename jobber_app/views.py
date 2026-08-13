@@ -32,12 +32,13 @@ from .client import (
     get_visits,
     create_job,
     create_job_visit,
+    create_task,
     edit_job_visit,
     get_client_properties,
     create_property_for_client,
     get_job_visits,
 )
-from .models import GhlAppointmentJobberJobMap
+from .models import GhlAppointmentJobberJobMap, JobberTaskIdempotency
 from .sync_ghl_calendar import (
     delete_jobber_visit_from_ghl_blocks,
     sync_jobber_job_to_ghl_blocks,
@@ -296,6 +297,92 @@ class JobberCreateJobView(APIView):
         if err:
             return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
         return Response({"job": job}, status=status.HTTP_201_CREATED)
+
+
+class JobberCreateTaskView(APIView):
+    """
+    POST – Create a Jobber Task (schedule clipboard item, not a Job).
+
+    Body (JSON):
+      - title (required)
+      - description (optional): stored as Task.instructions (e.g. Vacation / Absent)
+      - start_date (required): YYYY-MM-DD
+      - end_date (required): YYYY-MM-DD inclusive
+      - assignee_jobber_user_id (optional): Jobber user encoded id
+      - idempotency_key (optional): Hub leave submission id — skip duplicate creates
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        title = (request.data.get("title") or "").strip()
+        description = (request.data.get("description") or "").strip()
+        start_date = (request.data.get("start_date") or "").strip()
+        end_date = (request.data.get("end_date") or "").strip() or start_date
+        assignee = (request.data.get("assignee_jobber_user_id") or "").strip() or None
+        idempotency_key = (request.data.get("idempotency_key") or "").strip()[:128]
+
+        if not title:
+            return Response({"error": "title is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not start_date:
+            return Response(
+                {"error": "start_date is required (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if idempotency_key:
+            existing = JobberTaskIdempotency.objects.filter(
+                idempotency_key=idempotency_key
+            ).first()
+            if existing:
+                return Response(
+                    {
+                        "task_id": existing.jobber_task_id,
+                        "jobber_web_uri": existing.jobber_web_uri or None,
+                    }
+                )
+
+        task, err = create_task(
+            title,
+            description,
+            start_date,
+            end_date,
+            assignee_jobber_user_id=assignee,
+        )
+        if err:
+            logger.warning(
+                "Jobber taskCreate failed key=%s title=%s: %s",
+                idempotency_key or "-",
+                title,
+                err,
+            )
+            code = (
+                status.HTTP_400_BAD_REQUEST
+                if "required" in err.lower()
+                else status.HTTP_502_BAD_GATEWAY
+            )
+            return Response({"error": err}, status=code)
+
+        task_id = task.get("id") or ""
+        web_uri = task.get("jobberWebUri") or ""
+        if idempotency_key and task_id:
+            JobberTaskIdempotency.objects.get_or_create(
+                idempotency_key=idempotency_key,
+                defaults={
+                    "jobber_task_id": task_id,
+                    "jobber_web_uri": web_uri[:512],
+                },
+            )
+        logger.info(
+            "Jobber task created key=%s task_id=%s title=%s",
+            idempotency_key or "-",
+            task_id,
+            title,
+        )
+        return Response(
+            {"task_id": task_id, "jobber_web_uri": web_uri or None},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 def _build_booking_job_notes(data):
