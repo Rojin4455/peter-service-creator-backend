@@ -24,3 +24,5 @@ venv.bak/
 # Logs
 logs/
 *.log
+
+LOCK_IN.md

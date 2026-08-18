@@ -2608,6 +2608,8 @@ class JobberWebhookView(APIView):
     POST — Receive Jobber webhook events.
     Core behavior:
       - CLIENT_CREATE / CLIENT_UPDATE: sync client tags → GHL contact tags
+      - QUOTE_APPROVED: lock-in Stage 1 (Hub pending + GHL potential SMS)
+      - VISIT_COMPLETE: lock-in visit upsert + Stage 2 confirm/expire
       - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots (if block sync enabled)
       - VISIT_DESTROY: delete mapped GHL block slot (if block sync enabled)
       - JOB_CREATE: sync that job's visits to GHL block slots (fallback, if enabled)
@@ -2646,6 +2648,8 @@ class JobberWebhookView(APIView):
             "VISIT_CREATE",
             "VISIT_UPDATE",
             "VISIT_DESTROY",
+            "VISIT_COMPLETE",
+            "QUOTE_APPROVED",
             "JOB_CREATE",
         ):
             logger.warning("Jobber webhook ignored: unsupported topic=%s payload=%s", topic, payload)
@@ -2657,6 +2661,28 @@ class JobberWebhookView(APIView):
         if not item_id:
             logger.warning("Jobber webhook invalid: missing item id for topic=%s payload=%s", topic, payload)
             return Response({"error": f"Missing itemId for {topic} webhook"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if topic == "QUOTE_APPROVED":
+            from jobber_app.lock_in import process_quote_approved
+
+            result = process_quote_approved(str(item_id))
+            logger.warning("Jobber webhook lock-in stage1: item_id=%s result=%s", item_id, result)
+            status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
+            return Response(
+                {"received": True, "topic": topic, "itemId": str(item_id), "lock_in": result},
+                status=status_code,
+            )
+
+        if topic == "VISIT_COMPLETE":
+            from jobber_app.lock_in import process_visit_complete
+
+            result = process_visit_complete(str(item_id))
+            logger.warning("Jobber webhook lock-in visit_complete: item_id=%s result=%s", item_id, result)
+            status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
+            return Response(
+                {"received": True, "topic": topic, "itemId": str(item_id), "lock_in": result},
+                status=status_code,
+            )
 
         if topic in ("CLIENT_CREATE", "CLIENT_UPDATE"):
             result = sync_jobber_client_tags_to_ghl(str(item_id))
