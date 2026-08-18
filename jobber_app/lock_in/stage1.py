@@ -28,18 +28,14 @@ def _potential_sms(*, client_name, amount, frequency, confirm_date):
     )
 
 
-def _tech_ids_from_hub_visits(visit_ids):
-    if not visit_ids:
-        return [], []
-    try:
-        rows = hub_client.list_visits(jobber_visit_ids=visit_ids) or []
-    except hub_client.HubLockInError as exc:
-        logger.warning("Lock-in stage1 Hub visit lookup failed: %s", exc)
-        return [], []
+def _collect_techs_from_hub_rows(rows, *, first_clean_only=False):
     techs = []
     seen = set()
     matched_visit_ids = []
-    for row in rows:
+    for row in rows or []:
+        title = (row or {}).get("title") or ""
+        if first_clean_only and not title_is_first_cleaning(title):
+            continue
         vid = row.get("jobber_visit_id")
         if vid:
             matched_visit_ids.append(str(vid))
@@ -49,6 +45,29 @@ def _tech_ids_from_hub_visits(visit_ids):
                 seen.add(jid)
                 techs.append(str(jid))
     return techs, matched_visit_ids
+
+
+def _tech_ids_from_hub_visits(visit_ids):
+    if not visit_ids:
+        return [], []
+    try:
+        rows = hub_client.list_visits(jobber_visit_ids=visit_ids) or []
+    except hub_client.HubLockInError as exc:
+        logger.warning("Lock-in stage1 Hub visit lookup failed: %s", exc)
+        return [], []
+    return _collect_techs_from_hub_rows(rows)
+
+
+def _tech_ids_from_hub_client(client_id):
+    """When Jobber visit fetch is throttled, use visits already stored from VISIT_COMPLETE."""
+    if not client_id:
+        return [], []
+    try:
+        rows = hub_client.list_visits(client_id=client_id) or []
+    except hub_client.HubLockInError as exc:
+        logger.warning("Lock-in stage1 Hub visits by client failed: %s", exc)
+        return [], []
+    return _collect_techs_from_hub_rows(rows, first_clean_only=True)
 
 
 def _tech_ids_from_jobber(jobs):
@@ -118,6 +137,13 @@ def process_quote_approved(quote_id):
     ]
     jobber_techs, jobber_visit_ids = _tech_ids_from_jobber(source_jobs or first_clean_jobs)
     hub_techs, hub_visit_ids = _tech_ids_from_hub_visits(jobber_visit_ids)
+    if not hub_techs and not jobber_techs:
+        hub_techs, hub_visit_ids = _tech_ids_from_hub_client(client_id)
+        if hub_techs:
+            logger.info(
+                "Lock-in stage1 quote=%s: techs from Hub visits by client (Jobber visits throttled or empty)",
+                quote_id,
+            )
     technician_jobber_ids = hub_techs or jobber_techs
     original_visit_ids = hub_visit_ids or jobber_visit_ids
 
