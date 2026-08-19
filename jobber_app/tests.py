@@ -186,5 +186,5 @@ class VisitCompleteGhlFeedbackTests(SimpleTestCase):
         args, _kwargs = upd.call_args
         self.assertEqual(args[0], "ghl-1")
         self.assertEqual(args[1][0]["id"], "nX55NHpRyzOnQkkvdHOK")
-        self.assertEqual(args[1][0]["field_value"], "true")
+        self.assertEqual(args[1][0]["field_value"], "yes")
 

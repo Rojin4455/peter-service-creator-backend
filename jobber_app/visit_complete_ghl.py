@@ -27,7 +27,7 @@ from jobber_app.models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_VISIT_COMPLETED_FIELD_ID = "nX55NHpRyzOnQkkvdHOK"
-DEFAULT_VISIT_COMPLETED_FIELD_VALUE = "true"
+DEFAULT_VISIT_COMPLETED_FIELD_VALUE = "yes"
 
 
 def _field_id():
