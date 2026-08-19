@@ -4,6 +4,7 @@ from .models import (
     JobberClientGhlTagSyncState,
     JobberGhlNoteForward,
     JobberTaskIdempotency,
+    JobberVisitCompletedGhlTrigger,
     JobberVisitGhlBlockMap,
 )
 
@@ -58,6 +59,14 @@ class JobberVisitGhlBlockMapAdmin(admin.ModelAdmin):
     list_display_links = ("jobber_visit_id", "ghl_event_id")
     # These are CharFields, not FK relations.
     list_select_related = ()
+
+
+@admin.register(JobberVisitCompletedGhlTrigger)
+class JobberVisitCompletedGhlTriggerAdmin(admin.ModelAdmin):
+    list_display = ("jobber_visit_id", "ghl_contact_id", "created_at")
+    search_fields = ("jobber_visit_id", "ghl_contact_id")
+    ordering = ("-created_at",)
+    readonly_fields = ("created_at",)
 
 
 @admin.register(JobberTaskIdempotency)

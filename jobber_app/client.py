@@ -322,6 +322,24 @@ query VisitById($id: EncodedId!) {
 }
 """
 
+QUERY_VISIT_FOR_GHL_FEEDBACK = """
+query VisitForGhlFeedback($id: EncodedId!) {
+  visit(id: $id) {
+    id
+    title
+    startAt
+    client {
+      id
+      name
+      firstName
+      lastName
+      emails { address }
+      phones { number }
+    }
+  }
+}
+"""
+
 
 def get_visit_by_id(visit_id):
     """
@@ -333,6 +351,17 @@ def get_visit_by_id(visit_id):
         return None, err
     visit = (data or {}).get("visit")
     return visit, None
+
+
+def get_visit_for_ghl_feedback(visit_id):
+    """
+    Visit + client name/emails/phones for GHL Visit Completed? trigger.
+    Returns (visit dict or None, error_message).
+    """
+    data, err = _request(QUERY_VISIT_FOR_GHL_FEEDBACK, {"id": visit_id})
+    if err:
+        return None, err
+    return (data or {}).get("visit"), None
 
 
 # -----------------------------------------------------------------------------

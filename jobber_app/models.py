@@ -129,6 +129,24 @@ class GhlAppointmentJobberJobMap(models.Model):
         )
 
 
+class JobberVisitCompletedGhlTrigger(models.Model):
+    """
+    Idempotency: one GHL "Visit Completed?" = yes per Jobber visit_id.
+    GHL workflows clear the field; we must not retrigger the same visit.
+    """
+
+    jobber_visit_id = models.CharField(max_length=255, unique=True, db_index=True)
+    ghl_contact_id = models.CharField(max_length=128, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "jobber_visit_completed_ghl_trigger"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.jobber_visit_id} → GHL {self.ghl_contact_id or '?'}"
+
+
 class JobberTaskIdempotency(models.Model):
     """One Jobber task per Hub leave-approval / idempotency key."""
 

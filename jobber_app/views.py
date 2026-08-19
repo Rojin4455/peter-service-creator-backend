@@ -2609,7 +2609,7 @@ class JobberWebhookView(APIView):
     Core behavior:
       - CLIENT_CREATE / CLIENT_UPDATE: sync client tags → GHL contact tags
       - QUOTE_APPROVED: lock-in Stage 1 (Hub pending + GHL potential SMS)
-      - VISIT_COMPLETE: lock-in visit upsert + Stage 2 confirm/expire
+      - VISIT_COMPLETE: lock-in visit upsert + Stage 2 confirm/expire; GHL Visit Completed?=yes
       - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots (if block sync enabled)
       - VISIT_DESTROY: delete mapped GHL block slot (if block sync enabled)
       - JOB_CREATE: sync that job's visits to GHL block slots (fallback, if enabled)
@@ -2675,12 +2675,26 @@ class JobberWebhookView(APIView):
 
         if topic == "VISIT_COMPLETE":
             from jobber_app.lock_in import process_visit_complete
+            from jobber_app.visit_complete_ghl import process_visit_complete_ghl_feedback
 
             result = process_visit_complete(str(item_id))
-            logger.warning("Jobber webhook lock-in visit_complete: item_id=%s result=%s", item_id, result)
-            status_code = status.HTTP_200_OK if result.get("ok") else status.HTTP_502_BAD_GATEWAY
+            feedback = process_visit_complete_ghl_feedback(str(item_id))
+            logger.warning(
+                "Jobber webhook lock-in visit_complete: item_id=%s result=%s feedback=%s",
+                item_id,
+                result,
+                feedback,
+            )
+            ok = bool(result.get("ok")) and bool(feedback.get("ok"))
+            status_code = status.HTTP_200_OK if ok else status.HTTP_502_BAD_GATEWAY
             return Response(
-                {"received": True, "topic": topic, "itemId": str(item_id), "lock_in": result},
+                {
+                    "received": True,
+                    "topic": topic,
+                    "itemId": str(item_id),
+                    "lock_in": result,
+                    "ghl_visit_completed": feedback,
+                },
                 status=status_code,
             )
 

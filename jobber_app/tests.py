@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 from django.utils import timezone
@@ -89,4 +89,102 @@ class LockInStage2Tests(SimpleTestCase):
         self.assertTrue(out.get("expired"))
         hub.expire_pending.assert_called_once_with("p1")
         hub.confirm_pending.assert_not_called()
+
+
+def _feedback_visit(**kwargs):
+    visit = {
+        "id": "v-fb-1",
+        "title": "Weekly",
+        "client": {
+            "id": "c1",
+            "name": "Jane Doe",
+            "emails": [{"address": "jane@example.com"}],
+            "phones": [{"number": "+15555550100"}],
+        },
+    }
+    visit.update(kwargs)
+    return visit
+
+
+class VisitCompleteGhlFeedbackTests(SimpleTestCase):
+    def test_skips_internal_client(self):
+        from jobber_app.visit_complete_ghl import process_visit_complete_ghl_feedback
+
+        visit = _feedback_visit(client={"id": "c1", "name": "CLEAN ON THE GO INC."})
+        qs = MagicMock()
+        qs.exists.return_value = False
+        with patch(
+            "jobber_app.visit_complete_ghl.get_visit_for_ghl_feedback",
+            return_value=(visit, None),
+        ), patch(
+            "jobber_app.visit_complete_ghl.JobberVisitCompletedGhlTrigger.objects"
+        ) as objects:
+            objects.filter.return_value = qs
+            out = process_visit_complete_ghl_feedback("v-fb-1")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["reason"], "internal_client")
+        objects.create.assert_not_called()
+
+    def test_missing_ghl_contact_is_success(self):
+        from jobber_app.visit_complete_ghl import process_visit_complete_ghl_feedback
+
+        qs = MagicMock()
+        qs.exists.return_value = False
+        row = MagicMock()
+        with patch(
+            "jobber_app.visit_complete_ghl.get_visit_for_ghl_feedback",
+            return_value=(_feedback_visit(), None),
+        ), patch(
+            "jobber_app.visit_complete_ghl._resolve_location_id",
+            return_value=("wpToBiFJKYFBp5hk2bMt", None),
+        ), patch(
+            "jobber_app.visit_complete_ghl._resolve_ghl_contact",
+            return_value=(None, None),
+        ), patch(
+            "jobber_app.visit_complete_ghl.JobberVisitCompletedGhlTrigger.objects"
+        ) as objects:
+            objects.filter.return_value = qs
+            objects.create.return_value = row
+            out = process_visit_complete_ghl_feedback("v-fb-missing")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["reason"], "ghl_contact_not_found")
+        row.delete.assert_called_once()
+
+    def test_sets_visit_completed_and_is_idempotent(self):
+        from jobber_app.visit_complete_ghl import process_visit_complete_ghl_feedback
+
+        qs_empty = MagicMock()
+        qs_empty.exists.return_value = False
+        qs_done = MagicMock()
+        qs_done.exists.return_value = True
+        row = MagicMock()
+        with patch(
+            "jobber_app.visit_complete_ghl.get_visit_for_ghl_feedback",
+            return_value=(_feedback_visit(), None),
+        ), patch(
+            "jobber_app.visit_complete_ghl._resolve_location_id",
+            return_value=("wpToBiFJKYFBp5hk2bMt", None),
+        ), patch(
+            "jobber_app.visit_complete_ghl._resolve_ghl_contact",
+            return_value=("ghl-1", None),
+        ), patch(
+            "jobber_app.visit_complete_ghl.update_contact_custom_fields",
+            return_value=(True, None),
+        ) as upd, patch(
+            "jobber_app.visit_complete_ghl.JobberVisitCompletedGhlTrigger.objects"
+        ) as objects:
+            objects.filter.side_effect = [qs_empty, qs_done]
+            objects.create.return_value = row
+            first = process_visit_complete_ghl_feedback("v-fb-dup")
+            second = process_visit_complete_ghl_feedback("v-fb-dup")
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["ghl_contact_id"], "ghl-1")
+        self.assertTrue(second["skipped"])
+        self.assertEqual(second["reason"], "already_processed")
+        self.assertEqual(upd.call_count, 1)
+        row.save.assert_called_once()
+        args, _kwargs = upd.call_args
+        self.assertEqual(args[0], "ghl-1")
+        self.assertEqual(args[1][0]["id"], "nX55NHpRyzOnQkkvdHOK")
+        self.assertEqual(args[1][0]["field_value"], "true")
 

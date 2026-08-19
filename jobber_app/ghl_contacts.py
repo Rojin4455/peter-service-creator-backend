@@ -12,6 +12,7 @@ import requests
 from decouple import config
 
 from accounts.models import GHLAuthCredentials
+from jobber_app.ghl_calendar_client import _private_integration_token
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,35 @@ def _headers(creds, *, include_json=True):
 
 
 def _request(method, path, *, json=None, _retry=True):
+    url = f"{GHL_BASE_URL}{path}"
+    include_json = method.upper() in ("POST", "PUT", "PATCH")
+
+    pit = _private_integration_token()
+    if pit:
+        resp = requests.request(
+            method,
+            url,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {pit}",
+                "Version": GHL_API_VERSION,
+                **({"Content-Type": "application/json"} if include_json else {}),
+            },
+            json=json if include_json else None,
+            timeout=45,
+        )
+        try:
+            data = resp.json() if resp.content else {}
+        except requests.exceptions.JSONDecodeError:
+            data = {"raw": resp.text[:500]}
+        if resp.status_code >= 400:
+            msg = data.get("message") or data.get("error") or data.get("msg") or str(data)[:500]
+            return None, f"GHL API {resp.status_code}: {msg}"
+        return data, None
+
     creds = _get_credentials()
     if not creds:
         return None, "GHL not connected (GHLAuthCredentials missing)."
-    url = f"{GHL_BASE_URL}{path}"
-    include_json = method.upper() in ("POST", "PUT", "PATCH")
     resp = requests.request(
         method,
         url,
@@ -99,8 +124,13 @@ def _request(method, path, *, json=None, _retry=True):
     return data, None
 
 
-def _location_id(creds):
-    return (config("GHL_LOCATION_ID", default=None) or "").strip() or (creds.location_id or "").strip()
+def _location_id(creds=None):
+    loc = (config("GHL_LOCATION_ID", default=None) or "").strip()
+    if loc:
+        return loc
+    if creds:
+        return (creds.location_id or "").strip()
+    return ""
 
 
 def get_contact_by_id(contact_id):
@@ -413,6 +443,18 @@ def update_contact_tags(contact_id, tags_list):
     tags_list: list of strings.
     """
     payload = {"tags": list(tags_list)}
+    data, err = _request("PUT", f"/contacts/{contact_id}", json=payload)
+    if err:
+        return False, err
+    return True, None
+
+
+def update_contact_custom_fields(contact_id, custom_fields):
+    """
+    PUT /contacts/:id with body { customFields: [...] }.
+    custom_fields: list of {id, field_value} dicts.
+    """
+    payload = {"customFields": list(custom_fields)}
     data, err = _request("PUT", f"/contacts/{contact_id}", json=payload)
     if err:
         return False, err
