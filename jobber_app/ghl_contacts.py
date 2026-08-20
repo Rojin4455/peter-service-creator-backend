@@ -461,6 +461,23 @@ def update_contact_custom_fields(contact_id, custom_fields):
     return True, None
 
 
+def update_contact(contact_id, *, tags=None, custom_fields=None):
+    """
+    PUT /contacts/:id with optional tags and customFields in one request.
+    """
+    payload = {}
+    if tags is not None:
+        payload["tags"] = list(tags)
+    if custom_fields is not None:
+        payload["customFields"] = list(custom_fields)
+    if not payload:
+        return False, "nothing to update"
+    data, err = _request("PUT", f"/contacts/{contact_id}", json=payload)
+    if err:
+        return False, err
+    return True, None
+
+
 # -----------------------------------------------------------------------------
 # CRM Notes
 # Prefer documented contacts routes (/contacts/:id/notes),
