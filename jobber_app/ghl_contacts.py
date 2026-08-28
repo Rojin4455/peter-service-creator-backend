@@ -144,22 +144,32 @@ def get_contact_by_id(contact_id):
     return c, None
 
 
-def search_contacts_by_query(location_id, query):
-    """GET /contacts/?locationId=&query= → first contact or None."""
+def search_contacts(location_id, query):
+    """GET /contacts/?locationId=&query= → (list of contacts, error)."""
     if not location_id or not query:
-        return None, None
+        return [], None
     path = f"/contacts/?locationId={quote(location_id, safe='')}&query={quote(str(query), safe='')}"
     data, err = _request("GET", path)
     if err:
-        return None, err
+        return [], err
     if not isinstance(data, dict):
-        return None, None
+        return [], None
     contacts = data.get("contacts")
-    if isinstance(contacts, list) and contacts:
-        return contacts[0], None
+    if isinstance(contacts, list):
+        return [c for c in contacts if isinstance(c, dict)], None
     c = data.get("contact")
     if isinstance(c, dict):
-        return c, None
+        return [c], None
+    return [], None
+
+
+def search_contacts_by_query(location_id, query):
+    """GET /contacts/?locationId=&query= → first contact or None."""
+    contacts, err = search_contacts(location_id, query)
+    if err:
+        return None, err
+    if contacts:
+        return contacts[0], None
     return None, None
 
 
