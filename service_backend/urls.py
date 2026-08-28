@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from service_app.analytics_views import PricingCalculatorAnalyticsView
 
 urlpatterns = [
     path('api/admin/', admin.site.urls),
@@ -26,6 +27,11 @@ urlpatterns = [
     path('api/user/', include("user_app.urls")),
     path('api/quote/', include("quote_app.urls")),
     path('api/jobber/', include("jobber_app.urls")),
+    path(
+        'api/pricing-calculator/analytics/',
+        PricingCalculatorAnalyticsView.as_view(),
+        name='pricing-calculator-analytics',
+    ),
 ]
 
 if settings.DEBUG:  # Only serve media in dev
