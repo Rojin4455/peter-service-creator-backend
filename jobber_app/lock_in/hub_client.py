@@ -89,6 +89,14 @@ def mark_bonus_sms(bonus_id, **flags):
     return _request("PATCH", f"/api/internal/lock-in/bonuses/{bonus_id}/sms/", json=flags)
 
 
+def patch_pending(pending_id, payload):
+    return _request(
+        "PATCH",
+        f"/api/internal/lock-in/pending/{pending_id}/",
+        json=payload,
+    )
+
+
 def set_user_ghl_id(user_id, ghl_id):
     return _request(
         "PATCH",

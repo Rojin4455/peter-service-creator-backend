@@ -2609,6 +2609,7 @@ class JobberWebhookView(APIView):
     Core behavior:
       - CLIENT_CREATE / CLIENT_UPDATE: sync client tags → GHL contact tags
       - QUOTE_APPROVED: lock-in Stage 1 (Hub pending + GHL potential SMS)
+      - JOB_CREATE: attach recurring job to pending / retry Stage 1 after convert
       - VISIT_COMPLETE: lock-in visit upsert + Stage 2 confirm/expire; GHL Visit Completed?=yes
       - VISIT_CREATE / VISIT_UPDATE: sync that visit to GHL block slots (if block sync enabled)
       - VISIT_DESTROY: delete mapped GHL block slot (if block sync enabled)
@@ -2704,6 +2705,32 @@ class JobberWebhookView(APIView):
             print("[Jobber webhook] tag_sync topic=%s item_id=%s result=%s" % (topic, item_id, result))
             return Response(
                 {"received": True, "topic": topic, "itemId": str(item_id), "tag_sync": result},
+                status=status.HTTP_200_OK,
+            )
+
+        if topic == "JOB_CREATE":
+            from jobber_app.lock_in import process_job_created
+
+            lock_in = process_job_created(str(item_id))
+            result = sync_jobber_job_to_ghl_blocks(str(item_id))
+            logger.warning(
+                "Jobber webhook lock-in job_create: item_id=%s result=%s sync=%s",
+                item_id,
+                lock_in,
+                result,
+            )
+            print(
+                "[Jobber webhook] lock-in job_create item_id=%s result=%s sync=%s"
+                % (item_id, lock_in, result)
+            )
+            return Response(
+                {
+                    "received": True,
+                    "topic": topic,
+                    "itemId": str(item_id),
+                    "lock_in": lock_in,
+                    "sync": result,
+                },
                 status=status.HTTP_200_OK,
             )
 

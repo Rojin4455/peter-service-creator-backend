@@ -59,6 +59,44 @@ def pick_frequency(recurring_jobs):
     return ""
 
 
+def connection_nodes(conn):
+    conn = conn or {}
+    nodes = conn.get("nodes")
+    if nodes:
+        return list(nodes)
+    return [e.get("node") for e in (conn.get("edges") or []) if e.get("node")]
+
+
+def quote_line_item_names(quote):
+    """Product names only — never descriptions."""
+    names = []
+    for node in connection_nodes((quote or {}).get("lineItems")):
+        name = (node or {}).get("name") or ""
+        if name:
+            names.append(name)
+    return names
+
+
+def frequency_from_texts(texts):
+    for text in texts or []:
+        freq = recurring_frequency_from_title(text)
+        if freq:
+            return freq
+    return ""
+
+
+def frequency_from_quote(quote):
+    title = (quote or {}).get("title") or ""
+    return frequency_from_texts([title] + quote_line_item_names(quote))
+
+
+def job_looks_recurring(job):
+    job = job or {}
+    if recurring_frequency_from_title(job.get("title") or ""):
+        return True
+    return str(job.get("jobType") or "").upper() == "RECURRING"
+
+
 def parse_iso(value):
     if not value:
         return None
