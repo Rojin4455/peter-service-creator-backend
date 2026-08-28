@@ -3,6 +3,8 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
+import hashlib
+import secrets
 import uuid
 
 from django.utils import timezone
@@ -844,3 +846,50 @@ class ServiceBundle(models.Model):
     def apply_discount(self, amount):
         discount = self.get_discount_amount(amount)
         return max(Decimal(amount) - discount, Decimal('0.00'))
+
+
+class DashboardApiKey(models.Model):
+    """API keys for external dashboard software to pull pricing-calculator analytics."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, help_text="Label for this key (e.g. dashboard-prod)")
+    key_prefix = models.CharField(max_length=12, db_index=True, editable=False)
+    key_hash = models.CharField(max_length=64, unique=True, editable=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'dashboard_api_keys'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.key_prefix}…)"
+
+    @staticmethod
+    def hash_key(raw_key: str) -> str:
+        return hashlib.sha256(raw_key.encode('utf-8')).hexdigest()
+
+    @classmethod
+    def generate(cls, name: str = 'dashboard'):
+        """Create a new key. Returns (instance, raw_key). Raw key shown once."""
+        raw_key = f"pc_{secrets.token_urlsafe(32)}"
+        instance = cls.objects.create(
+            name=name,
+            key_prefix=raw_key[:12],
+            key_hash=cls.hash_key(raw_key),
+        )
+        return instance, raw_key
+
+    @classmethod
+    def authenticate_key(cls, raw_key: str):
+        if not raw_key:
+            return None
+        key_hash = cls.hash_key(raw_key)
+        try:
+            api_key = cls.objects.get(key_hash=key_hash, is_active=True)
+        except cls.DoesNotExist:
+            return None
+        api_key.last_used_at = timezone.now()
+        api_key.save(update_fields=['last_used_at'])
+        return api_key
