@@ -312,3 +312,100 @@ class VisitCompleteGhlFeedbackTests(SimpleTestCase):
         self.assertEqual(args[1][0]["id"], "nX55NHpRyzOnQkkvdHOK")
         self.assertEqual(args[1][0]["field_value"], "yes")
 
+
+class JobberFindUserByEmailTests(SimpleTestCase):
+    @patch("jobber_app.client._request")
+    def test_matches_email_case_insensitive(self, mock_req):
+        mock_req.return_value = (
+            {
+                "users": {
+                    "nodes": [
+                        {
+                            "id": "Z2lkOi8vam9iYmVyL1VzZXIvMQ==",
+                            "email": {"raw": "Pat@CleanOnTheGo.com"},
+                        },
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            },
+            None,
+        )
+        from jobber_app.client import find_user_id_by_email
+
+        uid, err = find_user_id_by_email("pat@cleanonthego.com")
+        self.assertIsNone(err)
+        self.assertEqual(uid, "Z2lkOi8vam9iYmVyL1VzZXIvMQ==")
+
+    @patch("jobber_app.client._request")
+    def test_not_found(self, mock_req):
+        mock_req.return_value = (
+            {"users": {"nodes": [], "pageInfo": {"hasNextPage": False}}},
+            None,
+        )
+        from jobber_app.client import find_user_id_by_email
+
+        uid, err = find_user_id_by_email("nobody@x.com")
+        self.assertIsNone(err)
+        self.assertIsNone(uid)
+
+    @patch("jobber_app.client._request")
+    def test_paginates(self, mock_req):
+        mock_req.side_effect = [
+            (
+                {
+                    "users": {
+                        "nodes": [{"id": "a", "email": {"raw": "a@x.com"}}],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    }
+                },
+                None,
+            ),
+            (
+                {
+                    "users": {
+                        "nodes": [{"id": "b", "email": {"raw": "b@x.com"}}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                },
+                None,
+            ),
+        ]
+        from jobber_app.client import find_user_id_by_email
+
+        uid, err = find_user_id_by_email("b@x.com")
+        self.assertIsNone(err)
+        self.assertEqual(uid, "b")
+        self.assertEqual(mock_req.call_count, 2)
+
+    def test_email_required_on_view(self):
+        from rest_framework.test import APIRequestFactory
+
+        from jobber_app.views import JobberUsersView
+
+        req = APIRequestFactory().get("/api/jobber/users/")
+        resp = JobberUsersView.as_view()(req)
+        self.assertEqual(resp.status_code, 400)
+
+    @patch("jobber_app.views.find_user_id_by_email")
+    def test_view_returns_user(self, mock_find):
+        from rest_framework.test import APIRequestFactory
+
+        from jobber_app.views import JobberUsersView
+
+        mock_find.return_value = ("abc", None)
+        req = APIRequestFactory().get("/api/jobber/users/?email=a@b.com")
+        resp = JobberUsersView.as_view()(req)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["user"]["id"], "abc")
+
+    @patch("jobber_app.views.find_user_id_by_email")
+    def test_view_jobber_error(self, mock_find):
+        from rest_framework.test import APIRequestFactory
+
+        from jobber_app.views import JobberUsersView
+
+        mock_find.return_value = (None, "Jobber not connected")
+        req = APIRequestFactory().get("/api/jobber/users/?email=a@b.com")
+        resp = JobberUsersView.as_view()(req)
+        self.assertEqual(resp.status_code, 502)
+

@@ -1298,6 +1298,64 @@ def create_task(
     return _task_from_payload(data)
 
 
+QUERY_USERS = """
+query HubUsers($first: Int!, $after: String) {
+  users(first: $first, after: $after) {
+    nodes {
+      id
+      name { full }
+      email { raw }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"""
+
+
+def _email_from_user_node(node):
+    email = (node or {}).get("email")
+    if isinstance(email, dict):
+        return (email.get("raw") or email.get("address") or "").strip()
+    if isinstance(email, str):
+        return email.strip()
+    return ""
+
+
+def find_user_id_by_email(email):
+    """
+    Find a Jobber team user id by email (case-insensitive).
+
+    Returns (user_id or None, error_message or None). Missing user is (None, None).
+    """
+    needle = (email or "").strip().lower()
+    if not needle:
+        return None, "email is required"
+
+    after = None
+    for _ in range(20):
+        variables = {"first": 50}
+        if after:
+            variables["after"] = after
+        data, err = _request(QUERY_USERS, variables)
+        if err:
+            return None, err
+        conn = (data or {}).get("users") or {}
+        for node in conn.get("nodes") or []:
+            if _email_from_user_node(node).lower() == needle:
+                uid = (node or {}).get("id") or ""
+                return (uid or None), None
+        page = conn.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+        if not after:
+            break
+    return None, None
+
+
 def get_task(task_id):
     """Fetch a Jobber task by encoded id. Returns (task dict or None, error)."""
     if not task_id:

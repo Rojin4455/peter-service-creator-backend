@@ -2,6 +2,7 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path("users/", views.JobberUsersView.as_view(), name="jobber-users"),
     path("clients/search/", views.JobberSearchClientsView.as_view(), name="jobber-search-clients"),
     path("clients/create/", views.JobberCreateClientView.as_view(), name="jobber-create-client"),
     path("properties/create/", views.JobberCreatePropertyView.as_view(), name="jobber-create-property"),

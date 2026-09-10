@@ -37,6 +37,7 @@ from .client import (
     get_client_properties,
     create_property_for_client,
     get_job_visits,
+    find_user_id_by_email,
 )
 from .models import GhlAppointmentJobberJobMap, JobberTaskIdempotency
 from .sync_ghl_calendar import (
@@ -97,6 +98,25 @@ def _ghl_calendar_map_defaults_from_cal(cal):
     defaults["booking_start_at"] = parse_booking_instant(start_raw, tz_name or None)
     defaults["booking_end_at"] = parse_booking_instant(end_raw, tz_name or None)
     return defaults
+
+
+class JobberUsersView(APIView):
+    """GET ?email= - Look up a Jobber team user id by email."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        email = (request.query_params.get("email") or "").strip()
+        if not email:
+            return Response(
+                {"error": "Query param 'email' is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user_id, err = find_user_id_by_email(email)
+        if err:
+            return Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
+        if not user_id:
+            return Response({"user": None})
+        return Response({"user": {"id": user_id, "email": email}})
 
 
 class JobberSearchClientsView(APIView):
