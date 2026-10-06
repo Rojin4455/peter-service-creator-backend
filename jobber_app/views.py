@@ -1047,15 +1047,15 @@ def execute_booking_confirm(data, calendar_obj=None):
         client_id = client.get("id")
         client_created = True
 
-    prop_id, _, err = get_client_properties(client_id)
+    prop_id, properties, err = get_client_properties(client_id)
     if err:
         return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
-    if not prop_id:
-        if not street1 or not city or not province or not postal_code:
-            return None, Response(
-                {"error": "Client has no property. Provide street1, city, province, postal_code to create one."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    matched_prop = _pick_property_id_for_service_address(properties, street1, postal_code)
+    if matched_prop:
+        prop_id = matched_prop
+    elif street1 and city and province and postal_code:
+        # Do not reuse a different property already on the client. A previous booking
+        # can leave the wrong service address, and Jobber jobs inherit that property.
         prop, err = create_property_for_client(
             client_id=client_id,
             street1=street1,
@@ -1067,6 +1067,11 @@ def execute_booking_confirm(data, calendar_obj=None):
         if err:
             return None, Response({"error": err}, status=status.HTTP_502_BAD_GATEWAY)
         prop_id = prop.get("id")
+    elif not prop_id:
+        return None, Response(
+            {"error": "Client has no property. Provide street1, city, province, postal_code to create one."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     job_notes = _build_booking_job_notes(data)
     job, err = create_job(
@@ -1582,10 +1587,69 @@ def _pick_preferred_submission(subs, label):
     return s0
 
 
+def _phone_digits(value):
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
+def _normalize_address_token(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _pick_property_id_for_service_address(properties, street1, postal_code):
+    """
+    Existing Jobber property whose street matches this booking.
+    Postal must also match when both sides have one.
+    """
+    want_street = _normalize_address_token(street1)
+    want_postal = _normalize_address_token(postal_code)
+    if not want_street:
+        return None
+    for prop in properties or []:
+        if not isinstance(prop, dict) or not prop.get("id"):
+            continue
+        addr = prop.get("address") if isinstance(prop.get("address"), dict) else {}
+        got_street = _normalize_address_token(addr.get("street1"))
+        if not got_street:
+            continue
+        if want_street not in got_street and got_street not in want_street:
+            continue
+        got_postal = _normalize_address_token(addr.get("postalCode"))
+        if want_postal and got_postal and want_postal != got_postal:
+            continue
+        return prop.get("id")
+    return None
+
+
+def _booking_contact_matches_submission(submission, merged):
+    """
+    The quote used for price and address must belong to the person who booked.
+    GHL custom data can carry another customer's quote URL.
+    """
+    if submission is None or not isinstance(merged, dict):
+        return False
+    sub_email = (getattr(submission, "customer_email", None) or "").strip().lower()
+    wh_email = (merged.get("email") or "").strip().lower()
+    sub_phone = _phone_digits(getattr(submission, "customer_phone", None))
+    wh_phone = _phone_digits(merged.get("phone"))
+    email_both = bool(sub_email and wh_email)
+    phone_both = bool(len(sub_phone) >= 10 and len(wh_phone) >= 10)
+    if email_both and sub_email == wh_email:
+        return True
+    if phone_both and sub_phone == wh_phone:
+        return True
+    if email_both or phone_both:
+        return False
+    return True
+
+
 def _resolve_customer_submission_for_booking(payload, merged):
     """
     Resolve CustomerSubmission for this appointment:
-      1) UUID extracted from quote / booking URL (attribution, workflow customData, merged fields).
+      1) UUID extracted from quote / booking URL (attribution, workflow customData, merged fields),
+         only when that quote's email or phone matches the booking contact.
       2) GHL contact id anywhere in payload → `ghl_contact_id` match.
       3) Email on merged payload → `customer_email__iexact` (calendar payloads sometimes omit contact id).
     """
@@ -1602,13 +1666,18 @@ def _resolve_customer_submission_for_booking(payload, merged):
                 .filter(id=uid)
                 .first()
             )
-            if sub:
+            if sub and _booking_contact_matches_submission(sub, merged):
                 logger.info(
                     "GHL booking: submission from quote URL submission_id=%s url_present=%s",
                     sub.id,
                     bool(quote_url),
                 )
                 return sub
+            if sub:
+                logger.warning(
+                    "GHL booking: ignoring quote URL submission=%s; email/phone does not match booking contact",
+                    sub.id,
+                )
 
     cid = _extract_ghl_webhook_contact_id(payload)
     if cid:

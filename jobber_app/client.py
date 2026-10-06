@@ -374,13 +374,27 @@ QUERY_CLIENT_PROPERTIES = """
 query ClientProperties($id: EncodedId!) {
   client(id: $id) {
     id
-    clientProperties(first: 10) {
+    clientProperties(first: 20) {
       nodes {
         id
+        address {
+          street1
+          street2
+          city
+          province
+          postalCode
+        }
       }
       edges {
         node {
           id
+          address {
+            street1
+            street2
+            city
+            province
+            postalCode
+          }
         }
       }
     }

@@ -409,3 +409,43 @@ class JobberFindUserByEmailTests(SimpleTestCase):
         resp = JobberUsersView.as_view()(req)
         self.assertEqual(resp.status_code, 502)
 
+
+class BookingQuoteIdentityTests(SimpleTestCase):
+    def test_rejects_another_customers_quote(self):
+        from jobber_app.views import _booking_contact_matches_submission
+
+        other = MagicMock(customer_email="mwalsh123@sympatico.ca", customer_phone="5145668600")
+        merged = {"email": "sullerearle@gmail.com", "phone": "+15142457139"}
+        self.assertFalse(_booking_contact_matches_submission(other, merged))
+
+    def test_accepts_same_email_with_country_code_phone(self):
+        from jobber_app.views import _booking_contact_matches_submission
+
+        same = MagicMock(customer_email="sullerearle@gmail.com", customer_phone="5142457139")
+        merged = {"email": "Sullerearle@gmail.com", "phone": "+1 (514) 245-7139"}
+        self.assertTrue(_booking_contact_matches_submission(same, merged))
+
+    def test_property_match_skips_unrelated_address(self):
+        from jobber_app.views import _pick_property_id_for_service_address
+
+        props = [
+            {
+                "id": "hudson",
+                "address": {
+                    "street1": "330 Rue Main, Hudson, QC J0P 1H0, Canada",
+                    "postalCode": "J0P 1H0",
+                },
+            },
+            {
+                "id": "ravin",
+                "address": {"street1": "3103 rue du ravin-boise", "postalCode": "J7V 5E5"},
+            },
+        ]
+        self.assertEqual(
+            _pick_property_id_for_service_address(props, "3103 rue du ravin-boise", "J7V5e5"),
+            "ravin",
+        )
+        self.assertIsNone(
+            _pick_property_id_for_service_address(props[:1], "3103 rue du ravin-boise", "J7V5e5")
+        )
+
