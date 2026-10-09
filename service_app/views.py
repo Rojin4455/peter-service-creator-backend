@@ -354,7 +354,7 @@ class FeatureListCreateView(generics.ListCreateAPIView):
         service_id = self.request.query_params.get('service', None)
         if service_id:
             queryset = queryset.filter(service_id=service_id)
-        return queryset.order_by('service__name', 'name')
+        return queryset.order_by('service__name', 'order', 'created_at')
 
 
 class FeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -367,6 +367,44 @@ class FeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
     #     # Soft delete
     #     instance.is_active = False
     #     instance.save()
+
+
+class FeatureReorderView(APIView):
+    """
+    Reorder a service's features.
+
+    POST /services/<service_id>/features/reorder/
+    Body: {"feature_ids": ["<uuid>", ...]}  -- full list in the desired order.
+    """
+    permission_classes = [IsAdminPermission]
+
+    def post(self, request, service_id):
+        service = get_object_or_404(Service, pk=service_id)
+        ids = request.data.get('feature_ids')
+        if not isinstance(ids, list) or not ids:
+            return Response({'feature_ids': 'A non-empty list of feature ids is required.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        ids = [str(i) for i in ids]
+        if len(set(ids)) != len(ids):
+            return Response({'feature_ids': 'Duplicate ids are not allowed.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        features = {str(f.id): f for f in Feature.objects.filter(service=service)}
+        unknown = [i for i in ids if i not in features]
+        if unknown:
+            return Response({'feature_ids': f'Features not found in this service: {unknown}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Any features omitted from the payload keep their relative order after the listed ones
+        rest = [f for k, f in sorted(features.items(), key=lambda kv: (kv[1].order, kv[1].created_at))
+                if k not in set(ids)]
+        ordered = [features[i] for i in ids] + rest
+        for index, feature in enumerate(ordered):
+            feature.order = index
+        with transaction.atomic():
+            Feature.objects.bulk_update(ordered, ['order'])
+
+        return Response(FeatureSerializer(ordered, many=True).data, status=status.HTTP_200_OK)
 
 
 # Package-Feature Views

@@ -52,6 +52,7 @@ urlpatterns = [
     # FEATURE MANAGEMENT (if you have these)
     # ============================================================================
     path('features/', views.FeatureListCreateView.as_view(), name='feature-list-create'),
+    path('services/<uuid:service_id>/features/reorder/', views.FeatureReorderView.as_view(), name='feature-reorder'),
     path('features/<uuid:pk>/', views.FeatureDetailView.as_view(), name='feature-detail'),
     
     # ============================================================================

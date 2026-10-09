@@ -145,12 +145,14 @@ class Feature(models.Model):
     service = models.ForeignKey(Service, related_name='features', on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'features'
+        ordering = ['order', 'created_at']
         unique_together = ['service', 'name']
 
     def __str__(self):

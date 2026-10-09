@@ -1,4 +1,5 @@
 # serializers.py
+from django.db.models import Max
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from decimal import Decimal
@@ -209,13 +210,14 @@ class PackageSerializer(serializers.ModelSerializer):
 
     def get_features(self, obj):
         """Get features included in the package"""
-        package_features = PackageFeature.objects.filter(package=obj)
+        package_features = PackageFeature.objects.filter(package=obj).select_related('feature').order_by('feature__order', 'feature__created_at')
         return [
             {
                 'id':pf.id,
                 'feature': pf.feature.id,
                 'name': pf.feature.name,
                 'description': pf.feature.description,
+                'order': pf.feature.order,
                 'is_included': pf.is_included
             }
             for pf in package_features
@@ -301,12 +303,15 @@ class FeatureSerializer(serializers.ModelSerializer):
     class Meta:
         model = Feature
         fields = [
-            'id', 'service', 'service_name', 'name', 'description',
+            'id', 'service', 'service_name', 'name', 'description', 'order',
             'is_active', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'order', 'created_at', 'updated_at']
 
     def create(self, validated_data):
+        # Append new features at the end of the service's list
+        last = Feature.objects.filter(service=validated_data['service']).aggregate(m=Max('order'))['m']
+        validated_data['order'] = 0 if last is None else last + 1
         feature = super().create(validated_data)
 
         # Automatically link to all existing packages under the same service
@@ -708,7 +713,7 @@ class PackageWithFeaturesSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_features(self, obj):
-        package_features = PackageFeature.objects.filter(package=obj, is_included=True)
+        package_features = PackageFeature.objects.filter(package=obj, is_included=True).select_related('feature').order_by('feature__order', 'feature__created_at')
         return [
             {
                 'id': pf.feature.id,
