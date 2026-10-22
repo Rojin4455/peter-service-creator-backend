@@ -273,8 +273,8 @@ class WorkHoursSyncTests(TestCase):
                                     "invalid": [{"index": 0, "errors": ["bad"]}]}
         with self.assertLogs("jobber_app.work_hours.sync", level="WARNING") as logs:
             out = sync_work_hours(now=NOW)
-        self.assertEqual((out["skipped"], out["invalid"]), (1, 1))
-        self.assertTrue(any(U2 in line for line in logs.output))
+        self.assertEqual((out["skipped"], out["skipped_users"], out["invalid"]), (1, [U2], 1))
+        self.assertTrue(any("1 work-hours rows for 1 unknown" in line and U2 in line for line in logs.output))
         self.assertFalse(WorkHoursSentDay.objects.filter(jobber_user_id=U1).exists())
         self.assertTrue(WorkHoursSentDay.objects.filter(jobber_user_id=U2).exists())
 

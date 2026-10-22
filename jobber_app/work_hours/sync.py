@@ -138,6 +138,7 @@ def sync_work_hours(*, days=None, dry_run=False, now=None):
         return summary
 
     saved = skipped = invalid_count = 0
+    unknown_users = set()
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start:start + BATCH_SIZE]
         try:
@@ -148,12 +149,13 @@ def sync_work_hours(*, days=None, dry_run=False, now=None):
             summary["error"] = f"Hub upsert failed: {exc}"
             return summary
 
-        skipped_ids = result.get("skipped_ids") or []
+        skipped_ids = set(result.get("skipped_ids") or [])
         invalid = result.get("invalid") or []
+        skipped_rows = sum(1 for row in batch if row[0] in skipped_ids)
         if skipped_ids:
             logger.warning(
-                "Hub skipped %s work-hours rows for unknown Jobber users: %s",
-                len(skipped_ids), sorted(set(skipped_ids)),
+                "Hub skipped %s work-hours rows for %s unknown Jobber users: %s",
+                skipped_rows, len(skipped_ids), sorted(skipped_ids),
             )
         if invalid:
             logger.warning("Hub rejected %s invalid work-hours rows: %s", len(invalid), invalid)
@@ -161,9 +163,13 @@ def sync_work_hours(*, days=None, dry_run=False, now=None):
         _record_sent([row for i, row in enumerate(batch) if i not in bad])
 
         saved += int(result.get("saved") or 0)
-        skipped += int(result.get("skipped") or len(skipped_ids))
+        skipped += skipped_rows
+        unknown_users |= skipped_ids
         invalid_count += len(invalid)
 
-    summary.update(ok=True, saved=saved, skipped=skipped, invalid=invalid_count)
+    summary.update(
+        ok=True, saved=saved, skipped=skipped,
+        skipped_users=sorted(unknown_users), invalid=invalid_count,
+    )
     logger.info("Work hours sync done: %s", summary)
     return summary
