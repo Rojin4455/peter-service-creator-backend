@@ -186,11 +186,22 @@ class WorkHoursHubClientTests(SimpleTestCase):
         self.assertEqual(hub_client.upsert_work_hours(self.rows)["saved"], 1)
         self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [2, 7])
 
-    def test_client_error_is_not_retried(self, _cfg, mock_post, mock_sleep):
-        mock_post.return_value = _response(403, {"detail": "bad secret"})
-        with self.assertRaisesMessage(hub_client.HubWorkHoursError, "Hub HTTP 403: bad secret"):
+    def test_wrong_secret_401_is_not_retried(self, _cfg, mock_post, mock_sleep):
+        mock_post.return_value = _response(401, {"detail": "bad secret"})
+        with self.assertRaisesMessage(hub_client.HubWorkHoursError, "check HUB_INTERNAL_SECRET"):
             hub_client.upsert_work_hours(self.rows)
         self.assertEqual(mock_post.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    def test_503_gives_up_after_max_attempts(self, _cfg, mock_post, mock_sleep):
+        mock_post.return_value = _response(503, {"detail": "secret not configured"})
+        with self.assertRaises(hub_client.HubWorkHoursError) as ctx:
+            hub_client.upsert_work_hours(self.rows)
+        msg = str(ctx.exception)
+        self.assertIn(f"giving up after {hub_client.MAX_ATTEMPTS} attempts", msg)
+        self.assertIn("Hub may not have its internal secret configured", msg)
+        self.assertEqual(mock_post.call_count, hub_client.MAX_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, hub_client.MAX_ATTEMPTS - 1)
 
     def test_missing_secret_raises_without_calling(self, mock_cfg, mock_post, mock_sleep):
         mock_cfg.side_effect = _fake_config({"HUB_BASE_URL": "https://hub.example"})
@@ -290,10 +301,10 @@ class WorkHoursSyncTests(TestCase):
 
     def test_hub_failure_reports_error(self, mock_fetch, mock_upsert, _cfg):
         mock_fetch.return_value = (self._entries(), None)
-        mock_upsert.side_effect = hub_client.HubWorkHoursError("Hub HTTP 403: bad secret")
+        mock_upsert.side_effect = hub_client.HubWorkHoursError("Hub HTTP 401: bad secret")
         out = sync_work_hours(now=NOW)
         self.assertFalse(out["ok"])
-        self.assertIn("403", out["error"])
+        self.assertIn("401", out["error"])
         self.assertFalse(WorkHoursSentDay.objects.exists())
 
     def test_dry_run_does_not_call_hub_or_write(self, mock_fetch, mock_upsert, _cfg):
