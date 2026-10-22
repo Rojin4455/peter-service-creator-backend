@@ -161,3 +161,28 @@ class JobberTaskIdempotency(models.Model):
 
     def __str__(self):
         return f"{self.idempotency_key} → {self.jobber_task_id}"
+
+
+class WorkHoursSentDay(models.Model):
+    """
+    Last work-hours totals sent to the Hub per Jobber user per local day.
+    Lets the nightly sync re-send 0.00 for days whose Jobber timesheet entries were deleted.
+    """
+
+    jobber_user_id = models.CharField(max_length=255, db_index=True)
+    date = models.DateField(db_index=True)
+    regular_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    drive_time_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    sent_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "jobber_work_hours_sent_day"
+        ordering = ["-date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["jobber_user_id", "date"], name="uniq_work_hours_user_date"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.jobber_user_id} {self.date}: {self.regular_hours} + {self.drive_time_hours} drive"

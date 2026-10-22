@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+from celery.schedules import crontab
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -229,5 +230,10 @@ CELERY_BEAT_SCHEDULE = {
     'make-api-call-every-minute': {
         'task': 'accounts.tasks.make_api_call',
         'schedule': timedelta(hours=10),
+    },
+    # CELERY_TIMEZONE is UTC: 07:30 UTC = 03:30 Toronto (EDT) / 02:30 (EST).
+    'jobber-work-hours-nightly': {
+        'task': 'jobber_app.tasks.sync_work_hours',
+        'schedule': crontab(hour=7, minute=30),
     },
 }

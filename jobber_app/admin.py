@@ -6,6 +6,7 @@ from .models import (
     JobberTaskIdempotency,
     JobberVisitCompletedGhlTrigger,
     JobberVisitGhlBlockMap,
+    WorkHoursSentDay,
 )
 
 
@@ -75,3 +76,12 @@ class JobberTaskIdempotencyAdmin(admin.ModelAdmin):
     search_fields = ("idempotency_key", "jobber_task_id")
     ordering = ("-created_at",)
     readonly_fields = ("created_at",)
+
+
+@admin.register(WorkHoursSentDay)
+class WorkHoursSentDayAdmin(admin.ModelAdmin):
+    list_display = ("jobber_user_id", "date", "regular_hours", "drive_time_hours", "sent_at")
+    search_fields = ("jobber_user_id",)
+    list_filter = ("date",)
+    ordering = ("-date",)
+    readonly_fields = ("sent_at",)
