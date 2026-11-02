@@ -80,7 +80,14 @@ class JobberTaskIdempotencyAdmin(admin.ModelAdmin):
 
 @admin.register(WorkHoursSentDay)
 class WorkHoursSentDayAdmin(admin.ModelAdmin):
-    list_display = ("jobber_user_id", "date", "regular_hours", "drive_time_hours", "sent_at")
+    list_display = (
+        "jobber_user_id",
+        "date",
+        "regular_hours",
+        "drive_time_hours",
+        "general_hours",
+        "sent_at",
+    )
     search_fields = ("jobber_user_id",)
     list_filter = ("date",)
     ordering = ("-date",)

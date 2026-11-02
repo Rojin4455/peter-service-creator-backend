@@ -31,6 +31,7 @@ query WorkHoursTimeSheetEntries(
       ticking
       timeSheetCategory
       user { id }
+      job { id }
     }
     pageInfo {
       hasNextPage

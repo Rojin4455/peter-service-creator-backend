@@ -173,6 +173,7 @@ class WorkHoursSentDay(models.Model):
     date = models.DateField(db_index=True)
     regular_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     drive_time_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    general_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     sent_at = models.DateTimeField(auto_now=True)
 
     class Meta:

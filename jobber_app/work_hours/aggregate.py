@@ -37,14 +37,28 @@ def split_by_local_day(start, end, tz):
         cur = seg_end
 
 
+def bucket_for(entry, drive_categories):
+    """
+    "drive" for drive-time categories; "general" for the General timer (GENERAL with no job
+    linked — the Hub decides per position whether that is drive or regular time); else "regular".
+    Visit timers are also GENERAL in Jobber but are linked to a job, so they stay regular.
+    """
+    category = (entry.get("timeSheetCategory") or DEFAULT_CATEGORY).upper()
+    if category in drive_categories:
+        return "drive"
+    if category == DEFAULT_CATEGORY and not entry.get("job"):
+        return "general"
+    return "regular"
+
+
 def aggregate_entries(entries, tz, drive_categories, window_start, window_end):
     """
     Sum timesheet seconds per (jobber_user_id, local date) for dates in [window_start, window_end).
 
-    Returns (totals, stats): totals maps (user_id, date) -> {"regular": secs, "drive": secs}.
+    Returns (totals, stats): totals maps (user_id, date) -> {"regular": secs, "drive": secs, "general": secs}.
     Running timers are skipped (picked up on a later run once stopped).
     """
-    totals = defaultdict(lambda: {"regular": 0.0, "drive": 0.0})
+    totals = defaultdict(lambda: {"regular": 0.0, "drive": 0.0, "general": 0.0})
     stats = Counter()
     for entry in entries:
         user_id = ((entry.get("user") or {}).get("id") or "").strip()
@@ -58,7 +72,7 @@ def aggregate_entries(entries, tz, drive_categories, window_start, window_end):
         if category in EXCLUDED_CATEGORIES:
             stats["skipped_break"] += 1
             continue
-        bucket = "drive" if category in drive_categories else "regular"
+        bucket = bucket_for(entry, drive_categories)
 
         start = parse_iso(entry["startAt"])
         if entry.get("endAt"):

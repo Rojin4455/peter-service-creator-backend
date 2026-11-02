@@ -3,7 +3,8 @@ Nightly sync: Jobber timesheets → Hub work hours.
 
 Re-sends every user-day in the lookback window (the Hub overwrites each day), and re-sends
 0.00 for user-days we sent before whose Jobber entries have since been deleted.
-Overtime is calculated by the Hub, not here.
+general_hours (General timer, no job linked) is sent separately: the Hub counts it as regular
+time for team leaders and drive time for everyone else. Overtime is calculated by the Hub, not here.
 """
 
 import logging
@@ -53,12 +54,13 @@ def _hours(seconds, user_id, day):
 
 
 def _payload(row):
-    user_id, day, regular, drive = row
+    user_id, day, regular, drive, general = row
     return {
         "jobber_user_id": user_id,
         "date": day.isoformat(),
         "regular_hours": str(regular),
         "drive_time_hours": str(drive),
+        "general_hours": str(general),
         "source": SOURCE,
     }
 
@@ -76,11 +78,15 @@ def _invalid_indexes(invalid):
 
 def _record_sent(rows):
     with transaction.atomic():
-        for user_id, day, regular, drive in rows:
+        for user_id, day, regular, drive, general in rows:
             WorkHoursSentDay.objects.update_or_create(
                 jobber_user_id=user_id,
                 date=day,
-                defaults={"regular_hours": regular, "drive_time_hours": drive},
+                defaults={
+                    "regular_hours": regular,
+                    "drive_time_hours": drive,
+                    "general_hours": general,
+                },
             )
 
 
@@ -114,16 +120,22 @@ def sync_work_hours(*, days=None, dry_run=False, now=None):
 
     totals, stats = aggregate_entries(entries, tz, drive_time_categories(), window_start, window_end)
     rows = [
-        (user_id, day, _hours(t["regular"], user_id, day), _hours(t["drive"], user_id, day))
+        (
+            user_id,
+            day,
+            _hours(t["regular"], user_id, day),
+            _hours(t["drive"], user_id, day),
+            _hours(t["general"], user_id, day),
+        )
         for (user_id, day), t in sorted(totals.items())
     ]
     previously_sent = (
         WorkHoursSentDay.objects.filter(date__gte=window_start, date__lt=window_end)
-        .exclude(regular_hours=0, drive_time_hours=0)
+        .exclude(regular_hours=0, drive_time_hours=0, general_hours=0)
         .values_list("jobber_user_id", "date")
     )
     zeroed = sorted(key for key in previously_sent if key not in totals)
-    rows.extend((user_id, day, ZERO_HOURS, ZERO_HOURS) for user_id, day in zeroed)
+    rows.extend((user_id, day, ZERO_HOURS, ZERO_HOURS, ZERO_HOURS) for user_id, day in zeroed)
 
     summary.update(
         entries_fetched=len(entries),

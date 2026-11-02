@@ -20,8 +20,8 @@ U1 = "Z2lkOi8vSm9iYmVyL1VzZXIvMQ=="
 U2 = "Z2lkOi8vSm9iYmVyL1VzZXIvMg=="
 
 
-def _entry(user, start, end, category="GENERAL", ticking=False, duration=None):
-    """start/end: naive Toronto-local datetimes (end may be None)."""
+def _entry(user, start, end, category="GENERAL", ticking=False, duration=None, job="J1"):
+    """start/end: naive Toronto-local datetimes (end may be None). Default is a visit timer (job linked)."""
     start_utc = start.replace(tzinfo=TORONTO).astimezone(timezone.utc)
     end_utc = end.replace(tzinfo=TORONTO).astimezone(timezone.utc) if end else None
     if duration is None:
@@ -34,6 +34,7 @@ def _entry(user, start, end, category="GENERAL", ticking=False, duration=None):
         "ticking": ticking,
         "timeSheetCategory": category,
         "user": {"id": user},
+        "job": {"id": job} if job else None,
     }
 
 
@@ -50,15 +51,32 @@ class WorkHoursAggregateTests(SimpleTestCase):
             {**_entry(U2, datetime(2026, 10, 20, 9), datetime(2026, 10, 20, 10)), "timeSheetCategory": None},
         ]
         totals, stats = aggregate_entries(entries, TORONTO, DRIVE, *self.window)
-        self.assertEqual(totals[(U1, date(2026, 10, 20))], {"regular": 4 * 3600, "drive": 4500})
-        self.assertEqual(totals[(U2, date(2026, 10, 20))], {"regular": 3600, "drive": 0})
+        self.assertEqual(
+            totals[(U1, date(2026, 10, 20))], {"regular": 4 * 3600, "drive": 4500, "general": 0}
+        )
+        self.assertEqual(totals[(U2, date(2026, 10, 20))], {"regular": 3600, "drive": 0, "general": 0})
         self.assertEqual(stats["skipped_break"], 1)
         self.assertEqual(stats["skipped_running"], 1)
+
+    def test_general_timer_without_job_is_general_and_visit_timer_stays_regular(self):
+        entries = [
+            _entry(U1, datetime(2026, 10, 20, 8), datetime(2026, 10, 20, 8, 30), job=None),
+            _entry(U1, datetime(2026, 10, 20, 9), datetime(2026, 10, 20, 12)),
+            {**_entry(U1, datetime(2026, 10, 20, 12), datetime(2026, 10, 20, 12, 15), job=None),
+             "timeSheetCategory": None},
+            _entry(U1, datetime(2026, 10, 20, 13), datetime(2026, 10, 20, 14), "OFFICE", job=None),
+            _entry(U1, datetime(2026, 10, 20, 14), datetime(2026, 10, 20, 14, 45), "DRIVING", job=None),
+        ]
+        totals, _ = aggregate_entries(entries, TORONTO, DRIVE, *self.window)
+        self.assertEqual(
+            totals[(U1, date(2026, 10, 20))],
+            {"regular": 4 * 3600, "drive": 2700, "general": 2700},
+        )
 
     def test_drive_categories_are_configurable(self):
         entries = [_entry(U1, datetime(2026, 10, 20, 9), datetime(2026, 10, 20, 10))]
         totals, _ = aggregate_entries(entries, TORONTO, frozenset({"GENERAL"}), *self.window)
-        self.assertEqual(totals[(U1, date(2026, 10, 20))], {"regular": 0, "drive": 3600})
+        self.assertEqual(totals[(U1, date(2026, 10, 20))], {"regular": 0, "drive": 3600, "general": 0})
 
     def test_entry_crossing_midnight_is_split_by_local_day(self):
         entries = [_entry(U1, datetime(2026, 10, 20, 22), datetime(2026, 10, 21, 1, 30))]
@@ -239,12 +257,34 @@ class WorkHoursSyncTests(TestCase):
         sent = mock_upsert.call_args.args[0]
         self.assertEqual(sent, [
             {"jobber_user_id": U1, "date": "2026-10-20", "regular_hours": "7.50",
-             "drive_time_hours": "1.25", "source": "jobber"},
+             "drive_time_hours": "1.25", "general_hours": "0.00", "source": "jobber"},
             {"jobber_user_id": U2, "date": "2026-10-21", "regular_hours": "4.00",
-             "drive_time_hours": "0.00", "source": "jobber"},
+             "drive_time_hours": "0.00", "general_hours": "0.00", "source": "jobber"},
         ])
         rec = WorkHoursSentDay.objects.get(jobber_user_id=U1, date=date(2026, 10, 20))
         self.assertEqual((rec.regular_hours, rec.drive_time_hours), (Decimal("7.50"), Decimal("1.25")))
+
+    def test_general_hours_sent_separately_and_recorded(self, mock_fetch, mock_upsert, _cfg):
+        mock_fetch.return_value = (self._entries() + [
+            _entry(U1, datetime(2026, 10, 20, 7, 30), datetime(2026, 10, 20, 9), job=None),
+        ], None)
+        mock_upsert.return_value = HUB_OK
+        sync_work_hours(now=NOW)
+        first = mock_upsert.call_args.args[0][0]
+        self.assertEqual(
+            (first["regular_hours"], first["drive_time_hours"], first["general_hours"]),
+            ("7.50", "1.25", "1.50"),
+        )
+        rec = WorkHoursSentDay.objects.get(jobber_user_id=U1, date=date(2026, 10, 20))
+        self.assertEqual(rec.general_hours, Decimal("1.50"))
+
+    def test_general_only_day_is_zeroed_when_deleted(self, mock_fetch, mock_upsert, _cfg):
+        WorkHoursSentDay.objects.create(jobber_user_id=U1, date=date(2026, 10, 16), general_hours=Decimal("2.00"))
+        mock_fetch.return_value = ([], None)
+        mock_upsert.return_value = HUB_OK
+        out = sync_work_hours(now=NOW)
+        self.assertEqual(out["zeroed_days"], 1)
+        self.assertEqual(mock_upsert.call_args.args[0][0]["general_hours"], "0.00")
 
     def test_deleted_day_is_resent_as_zero_once(self, mock_fetch, mock_upsert, _cfg):
         WorkHoursSentDay.objects.create(jobber_user_id=U2, date=date(2026, 10, 15), regular_hours=Decimal("6.00"))
@@ -256,7 +296,7 @@ class WorkHoursSyncTests(TestCase):
         self.assertEqual(out["zeroed_days"], 1)
         self.assertEqual(mock_upsert.call_args.args[0], [
             {"jobber_user_id": U2, "date": "2026-10-15", "regular_hours": "0.00",
-             "drive_time_hours": "0.00", "source": "jobber"},
+             "drive_time_hours": "0.00", "general_hours": "0.00", "source": "jobber"},
         ])
         rec = WorkHoursSentDay.objects.get(jobber_user_id=U2, date=date(2026, 10, 15))
         self.assertEqual(rec.regular_hours, Decimal("0.00"))
