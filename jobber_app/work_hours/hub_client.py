@@ -1,4 +1,4 @@
-"""HTTP client: service-creator → Hub work-hours upsert (shared-secret auth, retries)."""
+"""HTTP client: service-creator → Hub internal upserts (work hours, visits; shared-secret auth, retries)."""
 
 import logging
 import time
@@ -39,6 +39,11 @@ def upsert_work_hours(entries):
     Returns the Hub response dict ({"saved", "skipped", "skipped_ids", "invalid"}).
     Raises HubWorkHoursError when not configured, on non-retryable errors, or after retries.
     """
+    return upsert_entries(UPSERT_PATH, entries)
+
+
+def upsert_entries(path, entries):
+    """POST {"entries": [...]} to an internal Hub upsert endpoint (idempotent, so retries are safe)."""
     base = (config("HUB_BASE_URL", default="") or "").rstrip("/")
     secret = config("HUB_INTERNAL_SECRET", default="") or ""
     if not base:
@@ -46,7 +51,7 @@ def upsert_work_hours(entries):
     if not secret:
         raise HubWorkHoursError("HUB_INTERNAL_SECRET is not configured")
 
-    url = f"{base}{UPSERT_PATH}"
+    url = f"{base}{path}"
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -77,8 +82,8 @@ def upsert_work_hours(entries):
             raise HubWorkHoursError(f"giving up after {MAX_ATTEMPTS} attempts: {err}")
         delay = _retry_delay(attempt, resp)
         logger.warning(
-            "Hub work-hours upsert failed (attempt %s/%s), retrying in %ss: %s",
-            attempt, MAX_ATTEMPTS, delay, err,
+            "Hub upsert %s failed (attempt %s/%s), retrying in %ss: %s",
+            path, attempt, MAX_ATTEMPTS, delay, err,
         )
         time.sleep(delay)
     raise HubWorkHoursError("unreachable")

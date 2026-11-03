@@ -187,3 +187,23 @@ class WorkHoursSentDay(models.Model):
 
     def __str__(self):
         return f"{self.jobber_user_id} {self.date}: {self.regular_hours} + {self.drive_time_hours} drive"
+
+
+class VisitSyncState(models.Model):
+    """
+    Last row sent to the Hub per Jobber visit (visits sync for contractor pay).
+    Lets the nightly sync re-send visits deleted in Jobber with status "deleted".
+    """
+
+    jobber_visit_id = models.CharField(max_length=255, unique=True, db_index=True)
+    date = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=32, blank=True, default="")
+    payload = models.JSONField(default=dict)
+    sent_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "jobber_visit_sync_state"
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.jobber_visit_id} {self.date} {self.status}"

@@ -236,4 +236,9 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'jobber_app.tasks.sync_work_hours',
         'schedule': crontab(hour=7, minute=30),
     },
+    # No-op until VISITS_SYNC_ENABLED=true (Hub visits endpoint must be live).
+    'jobber-visits-nightly': {
+        'task': 'jobber_app.tasks.sync_visits',
+        'schedule': crontab(hour=7, minute=45),
+    },
 }

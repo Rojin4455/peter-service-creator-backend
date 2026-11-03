@@ -6,6 +6,7 @@ from .models import (
     JobberTaskIdempotency,
     JobberVisitCompletedGhlTrigger,
     JobberVisitGhlBlockMap,
+    VisitSyncState,
     WorkHoursSentDay,
 )
 
@@ -90,5 +91,14 @@ class WorkHoursSentDayAdmin(admin.ModelAdmin):
     )
     search_fields = ("jobber_user_id",)
     list_filter = ("date",)
+    ordering = ("-date",)
+    readonly_fields = ("sent_at",)
+
+
+@admin.register(VisitSyncState)
+class VisitSyncStateAdmin(admin.ModelAdmin):
+    list_display = ("jobber_visit_id", "date", "status", "sent_at")
+    search_fields = ("jobber_visit_id",)
+    list_filter = ("status", "date")
     ordering = ("-date",)
     readonly_fields = ("sent_at",)
