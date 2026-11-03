@@ -294,10 +294,12 @@ class VisitSyncTests(TestCase):
 
     def test_invalid_rows_not_recorded_and_hub_error_reported(self, mock_jobber, mock_upsert):
         self._setup(mock_jobber, window=[_visit("V1"), _visit("V2")])
-        mock_upsert.return_value = {"saved": 1, "invalid": [{"index": 0, "errors": ["bad"]}]}
+        mock_upsert.return_value = {"saved": 1, "unknown_user_ids": [U1, U1],
+                                    "invalid": [{"index": 0, "errors": ["bad"]}]}
         with patch("jobber_app.visit_sync.sync.config", side_effect=_config(True)):
             out = sync_visits(now=NOW)
-        self.assertEqual((out["saved"], out["invalid"]), (1, 1))
+        self.assertEqual((out["saved"], out["invalid"], out["unknown_user_ids"]), (1, 1, [U1]))
+        self.assertEqual(out["invalid_examples"], [{"index": 0, "errors": ["bad"]}])
         self.assertEqual(list(VisitSyncState.objects.values_list("jobber_visit_id", flat=True)), ["V2"])
 
         mock_upsert.side_effect = hub_client.HubWorkHoursError("Hub HTTP 404: not found")

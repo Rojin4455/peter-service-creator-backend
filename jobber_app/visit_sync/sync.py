@@ -145,6 +145,8 @@ def sync_visits(*, days=None, dry_run=False, now=None):
         return summary
 
     saved = invalid_count = 0
+    unknown_users = set()
+    invalid_examples = []
     for start in range(0, len(entries), BATCH_SIZE):
         batch = entries[start:start + BATCH_SIZE]
         try:
@@ -154,16 +156,26 @@ def sync_visits(*, days=None, dry_run=False, now=None):
             summary.update(saved=saved, invalid=invalid_count, error=f"Hub upsert failed: {exc}")
             return summary
         invalid = result.get("invalid") or []
-        skipped_ids = result.get("skipped_ids") or []
-        if skipped_ids:
-            logger.warning("Hub skipped %s visit rows: %s", len(skipped_ids), sorted(set(map(str, skipped_ids))))
+        # Hub response: {"saved", "unknown_user_ids", "invalid"}. Visits with unknown users are
+        # still saved by the Hub, so they're reported, not treated as errors.
+        unknown_users |= set(map(str, result.get("unknown_user_ids") or []))
         if invalid:
             logger.warning("Hub rejected %s invalid visit rows: %s", len(invalid), invalid)
+            invalid_examples.extend(
+                {**item, "index": item["index"] + start}
+                if isinstance(item, dict) and isinstance(item.get("index"), int) else item
+                for item in invalid[: max(0, 5 - len(invalid_examples))]
+            )
         bad = _invalid_indexes(invalid)
         _record_sent([e for i, e in enumerate(batch) if i not in bad])
         saved += int(result.get("saved") or 0)
         invalid_count += len(invalid)
 
-    summary.update(ok=True, saved=saved, invalid=invalid_count)
+    if unknown_users:
+        logger.warning("Hub doesn't know %s Jobber users on visits: %s", len(unknown_users), sorted(unknown_users))
+    summary.update(
+        ok=True, saved=saved, unknown_user_ids=sorted(unknown_users),
+        invalid=invalid_count, invalid_examples=invalid_examples,
+    )
     logger.info("Visits sync done: %s", summary)
     return summary
