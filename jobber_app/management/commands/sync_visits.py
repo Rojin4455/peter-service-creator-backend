@@ -26,11 +26,21 @@ class Command(BaseCommand):
             default=None,
             help="Lookback in local days (default VISITS_LOOKBACK_DAYS or 30).",
         )
+        parser.add_argument(
+            "--forward",
+            type=int,
+            default=None,
+            help="Days ahead to include scheduled visits (default VISITS_FORWARD_DAYS or 42).",
+        )
 
     def handle(self, *args, **options):
         if options["days"] is not None and options["days"] < 1:
             raise CommandError("--days must be at least 1")
-        summary = sync_visits(days=options["days"], dry_run=options["dry_run"])
+        if options["forward"] is not None and options["forward"] < 0:
+            raise CommandError("--forward must be 0 or more")
+        summary = sync_visits(
+            days=options["days"], forward=options["forward"], dry_run=options["dry_run"]
+        )
         self.stdout.write(json.dumps(summary, indent=2, default=str))
         if not summary.get("ok"):
             raise CommandError(summary.get("error") or "Visits sync failed")

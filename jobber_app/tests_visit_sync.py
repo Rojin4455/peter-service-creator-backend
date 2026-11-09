@@ -198,7 +198,8 @@ def _config(enabled):
     return lambda key, default=None, cast=None: values.get(key, default)
 
 
-NOW = datetime(2026, 11, 3, 15, tzinfo=timezone.utc)  # window 2026-10-04 .. 2026-11-03 (incl. today)
+# Toronto 2026-11-03 → window 2026-10-04 .. 2026-12-15 inclusive (30 back, 42 forward).
+NOW = datetime(2026, 11, 3, 15, tzinfo=timezone.utc)
 HUB_OK = {"saved": 0, "invalid": []}
 
 
@@ -231,16 +232,21 @@ class VisitSyncTests(TestCase):
 
     def test_sends_window_and_updated_invoice_visits_and_records_them(self, mock_jobber, mock_upsert):
         old = _visit("V0", start="2026-09-15T14:00:00Z", invoice={"id": "I0", "subtotal": 99, "tips": 5, "count": 1})
-        self._setup(mock_jobber, window=[_visit("V1")], updated=["V1", "V0"], by_id={"V0": old})
-        mock_upsert.return_value = {"saved": 2, "invalid": []}
+        upcoming = _visit("VUP", start="2026-12-10T15:00:00Z", status="UPCOMING")
+        self._setup(mock_jobber, window=[_visit("V1"), upcoming], updated=["V1", "V0"], by_id={"V0": old})
+        mock_upsert.return_value = {"saved": 3, "invalid": []}
         with patch("jobber_app.visit_sync.sync.config", side_effect=_config(True)):
             out = sync_visits(now=NOW)
         self.assertTrue(out["ok"], out)
-        self.assertEqual((out["window_start"], out["window_end_exclusive"]), ("2026-10-04", "2026-11-04"))
+        self.assertEqual((out["window_start"], out["window_end_exclusive"]), ("2026-10-04", "2026-12-16"))
         path, sent = mock_upsert.call_args.args
         self.assertEqual(path, UPSERT_PATH)
-        self.assertEqual([e["jobber_visit_id"] for e in sent], ["V0", "V1"])
+        self.assertEqual([e["jobber_visit_id"] for e in sent], ["V0", "V1", "VUP"])
         self.assertEqual(sent[0]["tip_share"], "5.00")
+        self.assertEqual(
+            (sent[2]["date"], sent[2]["status"], sent[2]["amount_rule"], sent[2]["amount_is_estimate"]),
+            ("2026-12-10", "UPCOMING", "estimate", True),
+        )
         mock_jobber.fetch_visit.assert_called_once_with("V0")
         self.assertEqual(VisitSyncState.objects.get(jobber_visit_id="V1").date, date(2026, 10, 20))
 
@@ -250,7 +256,8 @@ class VisitSyncTests(TestCase):
         VisitSyncState.objects.create(jobber_visit_id="VGONE", date=date(2026, 10, 20), status="COMPLETED", payload=gone)
         VisitSyncState.objects.create(jobber_visit_id="VMOVED", date=date(2026, 10, 21), status="UPCOMING", payload=moved)
         VisitSyncState.objects.create(jobber_visit_id="VOLD", date=date(2026, 9, 1), status="COMPLETED", payload={})
-        self._setup(mock_jobber, window=[], by_id={"VMOVED": _visit("VMOVED", start="2026-12-01T14:00:00Z",
+        # Rescheduled beyond even the 42-day forward window: updated, not marked deleted.
+        self._setup(mock_jobber, window=[], by_id={"VMOVED": _visit("VMOVED", start="2027-01-15T14:00:00Z",
                                                                    status="UPCOMING")})
         mock_upsert.return_value = HUB_OK
         with patch("jobber_app.visit_sync.sync.config", side_effect=_config(True)):
@@ -258,7 +265,7 @@ class VisitSyncTests(TestCase):
         sent = {e["jobber_visit_id"]: e for e in mock_upsert.call_args.args[1]}
         self.assertEqual(set(sent), {"VGONE", "VMOVED"})
         self.assertEqual((sent["VGONE"]["status"], sent["VGONE"]["visit_amount"]), ("deleted", "0.00"))
-        self.assertEqual((sent["VMOVED"]["status"], sent["VMOVED"]["date"]), ("UPCOMING", "2026-12-01"))
+        self.assertEqual((sent["VMOVED"]["status"], sent["VMOVED"]["date"]), ("UPCOMING", "2027-01-15"))
         self.assertEqual(out["deleted"], 1)
         self.assertEqual(VisitSyncState.objects.get(jobber_visit_id="VGONE").status, "deleted")
 

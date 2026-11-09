@@ -1,9 +1,10 @@
 """
 Nightly sync: Jobber visits → Hub (POST /api/internal/visits/upsert/) for contractor pay.
 
-Sends every visit dated in the last N Toronto days (default 30) plus visits on invoices updated in
-that period, re-sending each night so the Hub always holds current values (it carries differences
-on paid weeks into the next open week). Visits we sent before that Jobber no longer has are re-sent
+Sends every visit dated in the last N Toronto days (default 30) and the next M days (default 42 —
+the Hub shows upcoming visits on time-off requests), plus visits on invoices updated in the lookback
+period, re-sending each night so the Hub always holds current values (it carries differences on
+paid weeks into the next open week). Visits we sent before that Jobber no longer has are re-sent
 once with status "deleted" and 0.00 amounts.
 
 Off until VISITS_SYNC_ENABLED is true (the Hub endpoint must be live first); --dry-run always works.
@@ -36,6 +37,10 @@ def visits_sync_enabled():
 
 def lookback_days():
     return int(config("VISITS_LOOKBACK_DAYS", default=30))
+
+
+def forward_days():
+    return int(config("VISITS_FORWARD_DAYS", default=42))
 
 
 def _collect_visits(window_start, window_end, now, days, tz):
@@ -97,13 +102,14 @@ def _record_sent(entries):
             )
 
 
-def sync_visits(*, days=None, dry_run=False, now=None):
+def sync_visits(*, days=None, forward=None, dry_run=False, now=None):
     """
-    Build and (unless dry_run) send visit rows to the Hub.
+    Build and (unless dry_run) send visit rows to the Hub: ``days`` back, ``forward`` days ahead.
 
     Returns a JSON-serialisable summary with "ok" and, on failure, "error".
     """
     days = days or lookback_days()
+    forward = forward_days() if forward is None else forward
     summary = {"ok": False, "dry_run": dry_run}
     if not dry_run and not visits_sync_enabled():
         summary.update(ok=True, skipped="VISITS_SYNC_ENABLED is off; nothing sent")
@@ -113,7 +119,7 @@ def sync_visits(*, days=None, dry_run=False, now=None):
     tz = work_hours_timezone()
     now = now or dj_timezone.now()
     today = now.astimezone(tz).date()
-    window_start, window_end = today - timedelta(days=days), today + timedelta(days=1)
+    window_start, window_end = today - timedelta(days=days), today + timedelta(days=forward + 1)
     summary.update(window_start=window_start.isoformat(), window_end_exclusive=window_end.isoformat())
 
     try:
