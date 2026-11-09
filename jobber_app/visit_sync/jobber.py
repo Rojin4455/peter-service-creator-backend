@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from decimal import Decimal
 
 from jobber_app.work_hours.jobber import _request_with_backoff
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 20
 MAX_PAGES = 100
+PAGE_PAUSE_SECONDS = 1.5
 INVOICE_VISITS_LIMIT = 100
 
 
@@ -85,6 +87,8 @@ def _paginate(build_query, variables, root):
         after = page.get("endCursor")
         if not after:
             raise JobberFetchError("Jobber returned hasNextPage without endCursor")
+        # Pace the pages so a long window doesn't drain Jobber's query-cost budget in one burst.
+        time.sleep(PAGE_PAUSE_SECONDS)
     raise JobberFetchError(f"Paging {root} exceeded {MAX_PAGES} pages")
 
 

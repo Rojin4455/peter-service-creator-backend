@@ -159,7 +159,8 @@ class VisitAmountsTests(SimpleTestCase):
 
 @patch("jobber_app.visit_sync.jobber._request_with_backoff")
 class VisitJobberFetchTests(SimpleTestCase):
-    def test_window_visits_paginate_with_inline_filter(self, mock_req):
+    @patch("jobber_app.visit_sync.jobber.time.sleep")
+    def test_window_visits_paginate_with_inline_filter(self, mock_sleep, mock_req):
         mock_req.side_effect = [
             ({"visits": {"nodes": [{"id": "V1"}], "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}}, None),
             ({"visits": {"nodes": [{"id": "V2"}], "pageInfo": {"hasNextPage": False}}}, None),

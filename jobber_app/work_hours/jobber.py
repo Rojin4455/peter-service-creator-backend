@@ -64,7 +64,7 @@ def _request_with_backoff(query, variables):
             return None, err
         delay = BACKOFF_BASE_SECONDS * 2 ** (attempt - 1)
         logger.warning(
-            "Jobber timesheet query failed (attempt %s/%s), retrying in %ss: %s",
+            "Jobber query failed (attempt %s/%s), retrying in %ss: %s",
             attempt, MAX_ATTEMPTS, delay, err,
         )
         time.sleep(delay)
