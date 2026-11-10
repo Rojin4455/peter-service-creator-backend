@@ -449,3 +449,65 @@ class BookingQuoteIdentityTests(SimpleTestCase):
             _pick_property_id_for_service_address(props[:1], "3103 rue du ravin-boise", "J7V5e5")
         )
 
+
+
+class LockInHubClientAuthTests(SimpleTestCase):
+    """Every lock-in call to the Hub must carry X-Internal-Secret (Hub rejects it otherwise)."""
+
+    def _cfg(self, values):
+        return lambda key, default=None, **kw: values.get(key, default)
+
+    @patch("jobber_app.lock_in.hub_client.requests.request")
+    @patch("jobber_app.lock_in.hub_client.config")
+    def test_secret_header_on_every_call(self, mock_cfg, mock_req):
+        from jobber_app.lock_in import hub_client
+
+        mock_cfg.side_effect = self._cfg({"HUB_BASE_URL": "https://hub.example/", "HUB_INTERNAL_SECRET": "s3cret"})
+        mock_req.return_value = MagicMock(status_code=200, content=b"{}", json=lambda: {})
+        calls = [
+            lambda: hub_client.upsert_visit({"id": "v"}),
+            lambda: hub_client.list_visits(client_id="c"),
+            lambda: hub_client.create_pending({}),
+            lambda: hub_client.lookup_pending("c", "j"),
+            lambda: hub_client.confirm_pending(1, visit_id="v"),
+            lambda: hub_client.expire_pending(1),
+            lambda: hub_client.mark_bonus_sms(1, potential_sms_sent=True),
+            lambda: hub_client.patch_pending(1, {}),
+            lambda: hub_client.set_user_ghl_id(1, "g"),
+        ]
+        for call in calls:
+            call()
+        self.assertEqual(mock_req.call_count, len(calls))
+        for c in mock_req.call_args_list:
+            self.assertIn("/api/internal/lock-in/", c.args[1])
+            self.assertEqual(c.kwargs["headers"]["X-Internal-Secret"], "s3cret")
+
+    @patch("jobber_app.lock_in.hub_client.requests.request")
+    @patch("jobber_app.lock_in.hub_client.config")
+    def test_missing_secret_raises_without_calling_hub(self, mock_cfg, mock_req):
+        from jobber_app.lock_in import hub_client
+
+        mock_cfg.side_effect = self._cfg({"HUB_BASE_URL": "https://hub.example"})
+        with self.assertRaisesRegex(hub_client.HubLockInError, "HUB_INTERNAL_SECRET"):
+            hub_client.lookup_pending("c")
+        mock_req.assert_not_called()
+
+    @patch("jobber_app.lock_in.hub_client.requests.request")
+    @patch("jobber_app.lock_in.hub_client.config")
+    def test_403_mentions_secret(self, mock_cfg, mock_req):
+        from jobber_app.lock_in import hub_client
+
+        mock_cfg.side_effect = self._cfg({"HUB_BASE_URL": "https://hub.example", "HUB_INTERNAL_SECRET": "x"})
+        mock_req.return_value = MagicMock(status_code=403, content=b'{"detail":"Forbidden"}', json=lambda: {"detail": "Forbidden"})
+        with self.assertRaisesRegex(hub_client.HubLockInError, "403.*HUB_INTERNAL_SECRET"):
+            hub_client.lookup_pending("c")
+
+    @patch("jobber_app.lock_in.hub_client.requests.request")
+    @patch("jobber_app.lock_in.hub_client.config")
+    def test_non_object_error_body_raises_hub_error(self, mock_cfg, mock_req):
+        from jobber_app.lock_in import hub_client
+
+        mock_cfg.side_effect = self._cfg({"HUB_BASE_URL": "https://hub.example", "HUB_INTERNAL_SECRET": "x"})
+        mock_req.return_value = MagicMock(status_code=403, content=b'"Forbidden"', text='"Forbidden"', json=lambda: "Forbidden")
+        with self.assertRaisesRegex(hub_client.HubLockInError, "403"):
+            hub_client.list_visits(client_id="c")

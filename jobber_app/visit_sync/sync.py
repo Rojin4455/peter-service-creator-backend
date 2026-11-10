@@ -129,11 +129,19 @@ def sync_visits(*, days=None, forward=None, dry_run=False, now=None):
         summary["error"] = f"Jobber fetch failed: {exc}"
         return summary
 
-    entries = [
+    built = [
         build_entry(v, tz, weights.get((v.get("invoice") or {}).get("id")))
         for _, v in sorted(by_id.items())
     ]
-    entries += [deleted_entry(state.jobber_visit_id, state.payload) for state in deleted]
+    # Visits with no date (unscheduled) are skipped: the Hub can't use them until they're scheduled.
+    # One we already sent with a date is retracted as "deleted", so the Hub doesn't keep its old date.
+    undated_ids = [e["jobber_visit_id"] for e in built if not e["date"]]
+    retract = list(
+        VisitSyncState.objects.filter(jobber_visit_id__in=undated_ids, date__isnull=False)
+        .exclude(status="deleted")
+    )
+    entries = [e for e in built if e["date"]]
+    entries += [deleted_entry(state.jobber_visit_id, state.payload) for state in deleted + retract]
 
     summary.update(
         visits=len(entries),
@@ -144,6 +152,8 @@ def sync_visits(*, days=None, forward=None, dry_run=False, now=None):
         },
         needs_review=sum(1 for e in entries if e.get("amount_needs_review")),
         internal=sum(1 for e in entries if e.get("internal")),
+        unscheduled_skipped=len(undated_ids) - len(retract),
+        unscheduled_retracted=len(retract),
     )
     if dry_run:
         summary["ok"] = True

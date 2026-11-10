@@ -20,6 +20,10 @@ def _request(method, path, *, json=None, params=None):
     base = _base()
     if not base:
         raise HubLockInError("HUB_BASE_URL is not configured")
+    # Same shared secret as the visits / work-hours upserts; the Hub requires it on all internal endpoints.
+    secret = config("HUB_INTERNAL_SECRET", default="") or ""
+    if not secret:
+        raise HubLockInError("HUB_INTERNAL_SECRET is not configured")
     url = f"{base}{path}"
     try:
         resp = requests.request(
@@ -30,6 +34,7 @@ def _request(method, path, *, json=None, params=None):
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "X-Internal-Secret": secret,
             },
             timeout=30,
         )
@@ -40,8 +45,12 @@ def _request(method, path, *, json=None, params=None):
     except ValueError:
         data = {}
     if resp.status_code >= 400:
-        detail = data.get("detail") or data.get("error") or resp.text[:400]
-        raise HubLockInError(f"Hub HTTP {resp.status_code}: {detail}")
+        # Error bodies may not be a JSON object (HTML page, bare string): never let that crash callers.
+        detail = (
+            (data.get("detail") or data.get("error")) if isinstance(data, dict) else None
+        ) or resp.text[:400]
+        hint = " (check HUB_INTERNAL_SECRET matches the Hub's secret)" if resp.status_code in (401, 403) else ""
+        raise HubLockInError(f"Hub HTTP {resp.status_code}: {detail}{hint}")
     return data
 
 

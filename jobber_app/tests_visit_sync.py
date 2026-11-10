@@ -277,6 +277,31 @@ class VisitSyncTests(TestCase):
         self.assertEqual((out["visits"], out["deleted"]), (0, 0))
         mock_upsert.assert_not_called()
 
+    def test_unscheduled_visits_skipped_or_retracted(self, mock_jobber, mock_upsert):
+        # VNEW: never sent, no date → skipped. VWAS: sent before with a date, now unscheduled → deleted.
+        was = build_entry(_visit("VWAS", start="2026-11-20T14:00:00Z", status="UPCOMING"), TORONTO)
+        VisitSyncState.objects.create(jobber_visit_id="VWAS", date=date(2026, 11, 20), status="UPCOMING", payload=was)
+        self._setup(mock_jobber, window=[_visit("V1")], updated=["VNEW"],
+                    by_id={"VNEW": _visit("VNEW", start=None, status="UNSCHEDULED"),
+                           "VWAS": _visit("VWAS", start=None, status="UNSCHEDULED")})
+        mock_upsert.return_value = HUB_OK
+        with patch("jobber_app.visit_sync.sync.config", side_effect=_config(True)):
+            out = sync_visits(now=NOW)
+        sent = {e["jobber_visit_id"]: e for e in mock_upsert.call_args.args[1]}
+        self.assertEqual(set(sent), {"V1", "VWAS"})
+        self.assertEqual((sent["VWAS"]["status"], sent["VWAS"]["date"], sent["VWAS"]["visit_amount"]),
+                         ("deleted", "2026-11-20", "0.00"))
+        self.assertEqual((out["unscheduled_skipped"], out["unscheduled_retracted"]), (1, 1))
+        self.assertFalse(VisitSyncState.objects.filter(jobber_visit_id="VNEW").exists())
+        self.assertEqual(VisitSyncState.objects.get(jobber_visit_id="VWAS").status, "deleted")
+
+        # Next night: still unscheduled → nothing more to send for it.
+        mock_upsert.reset_mock()
+        with patch("jobber_app.visit_sync.sync.config", side_effect=_config(True)):
+            out = sync_visits(now=NOW)
+        self.assertEqual({e["jobber_visit_id"] for e in mock_upsert.call_args.args[1]}, {"V1"})
+        self.assertEqual(out["unscheduled_retracted"], 0)
+
     def test_jobber_error_sends_nothing_and_deletes_nothing(self, mock_jobber, mock_upsert):
         VisitSyncState.objects.create(jobber_visit_id="V9", date=date(2026, 10, 20), status="COMPLETED", payload={})
         self._setup(mock_jobber)
